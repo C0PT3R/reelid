@@ -5,11 +5,13 @@
 //	find /media/films -printf "%y\t%s\t%p\n" > films.tsv
 //	analyse -root /media/films films.tsv
 //
-// It prints the analysis as JSON, or a summary with -summary.
+// It prints the analysis as JSON, or a summary with -summary. With
+// -tmdb-token and -tmdb-cache, each title is also matched to TMDB.
 package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -20,11 +22,16 @@ import (
 	"strings"
 
 	"github.com/overfin/analyser/analyse"
+	"github.com/overfin/analyser/match"
+	"github.com/overfin/analyser/tmdb"
 )
 
 func main() {
 	root := flag.String("root", "", "the library's folder (default: the folder all paths share)")
 	summary := flag.Bool("summary", false, "print counts instead of the JSON")
+	tokenFile := flag.String("tmdb-token", os.Getenv("TMDB_TOKEN_FILE"), "match the titles to TMDB, with the API read access token in this file (default $TMDB_TOKEN_FILE; none: no matching)")
+	cache := flag.String("tmdb-cache", "", "the folder of TMDB's cached answers (needed for matching)")
+	rate := flag.Float64("rate", 10, "at most this many requests to TMDB a second")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: analyse [-root folder] [-summary] [listing.tsv]")
 		flag.PrintDefaults()
@@ -48,6 +55,13 @@ func main() {
 	}
 	entries = relative(entries, *root)
 	res := analyse.Analyse(entries)
+	var matches []matched
+	if *tokenFile != "" {
+		if matches, err = matchTitles(res, *tokenFile, *cache, *rate); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
 
 	if *summary {
 		printSummary(res)
@@ -55,7 +69,14 @@ func main() {
 	}
 	out := json.NewEncoder(os.Stdout)
 	out.SetIndent("", "  ")
-	if err := out.Encode(res); err != nil {
+	var doc any = res
+	if matches != nil {
+		doc = struct {
+			analyse.Result
+			Matches []matched `json:"matches"`
+		}{res, matches}
+	}
+	if err := out.Encode(doc); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -119,6 +140,38 @@ func sharedFolder(entries []analyse.Entry) string {
 		shared = shared[:n]
 	}
 	return strings.Join(shared, "/")
+}
+
+// matched is a title's TMDB match, by the title's folder (or first file).
+type matched struct {
+	Title string `json:"title"`
+	match.Result
+}
+
+// matchTitles matches each title found to TMDB, through a cache.
+func matchTitles(res analyse.Result, tokenFile, cache string, rate float64) ([]matched, error) {
+	if cache == "" {
+		return nil, fmt.Errorf("-tmdb-cache: say where TMDB's answers are kept")
+	}
+	token, err := tmdb.ReadToken(tokenFile)
+	if err != nil {
+		return nil, err
+	}
+	client := tmdb.NewClient(token, cache, rate)
+	out := make([]matched, 0, len(res.Titles))
+	for _, t := range res.Titles {
+		r, err := match.Match(context.Background(), client, match.QueryOf(t))
+		if err != nil {
+			return nil, err
+		}
+		where := t.Folder
+		if where == "" && len(t.Videos) > 0 {
+			where = t.Videos[0].Path
+		}
+		out = append(out, matched{Title: where, Result: r})
+	}
+	fmt.Fprintf(os.Stderr, "TMDB: %d requests made, %d answers from the cache\n", client.Requests(), client.Hits())
+	return out, nil
 }
 
 func printSummary(res analyse.Result) {

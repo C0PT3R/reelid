@@ -39,6 +39,7 @@ type style struct {
 	oneFolder      bool // with flat: every file in one folder below the library's, not in it
 	anime          bool // episodes named as anime releases: "[GRP] Show - 05 [1080p]"
 	mixed          bool // films and series analysed as one library
+	translated     bool // titles named by one of their TMDB translations or alternative titles (stage 2)
 }
 
 // year writes a title's year in a folder's or a file's name, with its
@@ -75,6 +76,16 @@ func render(f *file, s style, mode int) string {
 	t := f.title
 	tkey := strconv.Itoa(t.index)
 	name, show, epName := t.name, f.show, f.epName
+	if s.translated && t.translated != "" {
+		// The title under another of its names: the series' name in its
+		// files too.
+		if strings.HasPrefix(show, name) {
+			show = t.translated + show[len(name):]
+		} else if show != "" {
+			show = t.translated
+		}
+		name = t.translated
+	}
 	if mask {
 		if strings.HasPrefix(show, name) {
 			show = "<Title>" + show[len(name):]

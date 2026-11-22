@@ -25,7 +25,10 @@ type title struct {
 	idKind  string // "tmdbid", "tvdbid", "imdbid"; "" for none
 	id      string
 	quality string // its first video's, for release-style folder names
-	videos  []*file
+	// translated is another of its names on TMDB, for the translated
+	// damage; "" when it has none (or TMDB wasn't asked).
+	translated string
+	videos     []*file
 }
 
 // file is a video or a subtitle of the key, or one the damage adds.

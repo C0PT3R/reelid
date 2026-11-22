@@ -16,6 +16,7 @@ package main
 import (
 	"bufio"
 	"cmp"
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -23,6 +24,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/overfin/analyser/tmdb"
 )
 
 // damages are the runs: the clean key, each damage alone, then some
@@ -72,6 +75,12 @@ func main() {
 	top := flag.Int("patterns", 30, "how many of the commonest failure patterns to print")
 	samples := flag.Int("samples", 0, "print this many anonymous path patterns per damage, to see what it does")
 	debug := flag.String("debug", "", "write failures with their REAL paths to this file (keep it private, outside the repository)")
+	stage := flag.Int("stage", 1, "1: the paths' analysis; 2: matching to TMDB (asks TMDB, see -tmdb-token)")
+	cache := flag.String("tmdb-cache", os.Getenv("HOME")+"/analyser-corpus/tmdb-cache", "stage 2: the folder of TMDB's cached answers")
+	tokenFile := flag.String("tmdb-token", os.Getenv("TMDB_TOKEN_FILE"), "stage 2: the file holding TMDB's API read access token (default $TMDB_TOKEN_FILE)")
+	offline := flag.Bool("offline", false, "stage 2: answer from the cache only, never ask TMDB")
+	rate := flag.Float64("rate", 15, "stage 2: at most this many requests to TMDB a second")
+	workers := flag.Int("workers", 6, "stage 2: titles matched at once")
 	flag.Parse()
 
 	c, err := readCorpus(*key)
@@ -105,6 +114,14 @@ func main() {
 	}
 	fmt.Printf("key: %d files read (%d films, %d series), %d left out (not in the clean layout)\n\n", len(c.files), films, series, c.skipped)
 
+	if *stage == 2 {
+		if err := runStage2(c, *cache, *tokenFile, *offline, *rate, *workers, *only, *top, dbg); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	languages := map[int]string{}
 	var runs []*run
 	for _, s := range damages {
@@ -129,6 +146,33 @@ func main() {
 		}
 	}
 	report(runs, *top)
+}
+
+// runStage2 makes the TMDB client and runs stage 2, then says how many
+// requests went to TMDB.
+func runStage2(c *corpus, cache, tokenFile string, offline bool, rate float64, workers int, only string, top int, dbg *bufio.Writer) error {
+	token := ""
+	if !offline {
+		if tokenFile == "" {
+			return fmt.Errorf("stage 2: say where TMDB's token is (-tmdb-token or TMDB_TOKEN_FILE), or run -offline")
+		}
+		var err error
+		if token, err = tmdb.ReadToken(tokenFile); err != nil {
+			return err
+		}
+	}
+	if err := outsideRepository(cache); err != nil {
+		return fmt.Errorf("-tmdb-cache: %w", err)
+	}
+	client := tmdb.NewClient(token, cache, rate)
+	client.Offline = offline
+	var write func(string)
+	if dbg != nil {
+		write = func(line string) { fmt.Fprintln(dbg, line) }
+	}
+	err := stage2(context.Background(), c, client, max(1, workers), only, top, write)
+	fmt.Printf("\nTMDB: %d requests made, %d answers from the cache\n", client.Requests(), client.Hits())
+	return err
 }
 
 // added are the files a damage adds: extras, other versions.
