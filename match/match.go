@@ -24,8 +24,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/overfin/analyser/analyse"
-	"github.com/overfin/analyser/tmdb"
+	"github.com/C0PT3R/reelid/analyse"
+	"github.com/C0PT3R/reelid/tmdb"
 )
 
 // Query is what the paths say of a title.

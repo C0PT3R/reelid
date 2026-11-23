@@ -21,10 +21,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/overfin/analyser/analyse"
-	"github.com/overfin/analyser/inside"
-	"github.com/overfin/analyser/match"
-	"github.com/overfin/analyser/tmdb"
+	"github.com/C0PT3R/reelid/analyse"
+	"github.com/C0PT3R/reelid/inside"
+	"github.com/C0PT3R/reelid/match"
+	"github.com/C0PT3R/reelid/tmdb"
 )
 
 func main() {

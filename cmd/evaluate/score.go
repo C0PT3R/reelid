@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/overfin/analyser/analyse"
+	"github.com/C0PT3R/reelid/analyse"
 )
 
 // Scoring one run: the damaged library analysed, and each field of each

@@ -26,7 +26,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/overfin/analyser/tmdb"
+	"github.com/C0PT3R/reelid/tmdb"
 )
 
 // damages are the runs: the clean key, each damage alone, then some

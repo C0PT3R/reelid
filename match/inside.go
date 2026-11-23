@@ -7,9 +7,9 @@ import (
 	"math"
 	"slices"
 
-	"github.com/overfin/analyser/analyse"
-	"github.com/overfin/analyser/inside"
-	"github.com/overfin/analyser/tmdb"
+	"github.com/C0PT3R/reelid/analyse"
+	"github.com/C0PT3R/reelid/inside"
+	"github.com/C0PT3R/reelid/tmdb"
 )
 
 // Stage 3: what the files say of themselves (see package inside), weighed
