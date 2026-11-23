@@ -1,7 +1,8 @@
-# Overfin analyser
+# reelid
 
-Overfin's own file analyser: it says what the files of a media library
-are. Stage 1 is **identification from paths alone**: no file is opened
+reelid says what the files of a media library are: which film or
+episode each one is. It started as Overfin's file analyser and is
+independent of it. Stage 1 is **identification from paths alone**: no file is opened
 and no database asked. Stage 2 **matches each title to its TMDB ID**.
 Stage 3 weighs **what is inside the files** too, when it is known.
 
@@ -231,4 +232,4 @@ go run ./cmd/evaluate -real ~/analyser-corpus/realworld.tsv -tmdb-token ~/.confi
 
 ## How it's made
 
-The Overfin analyser is designed by its maintainer, who makes the architecture, security and product decisions, and written by Claude (Anthropic's AI); Claude's commits carry a `Co-Authored-By: Claude` trailer. The code is checked by its unit tests and by the evaluator above; it hasn't had an independent security review yet.
+reelid is designed by its maintainer, who makes the architecture, security and product decisions, and written by Claude (Anthropic's AI); Claude's commits carry a `Co-Authored-By: Claude` trailer. The code is checked by its unit tests and by the evaluator above; it hasn't had an independent security review yet.
