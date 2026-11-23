@@ -277,9 +277,13 @@ func newVideo(p string, size int64) *video {
 			break
 		}
 	}
-	if j >= 0 && len(x.releaseAt) == 0 {
-		// Without a season folder, a folder of one episode's release.
-		if _, ep := findEpisode(x.ctx[j], false); ep {
+	if len(x.releaseAt) == 0 {
+		// Without a season folder, folders of one episode's release (one
+		// in another: "Show.S01E02.1080p-GRP--copy/Show.S01E02.1080p-GRP").
+		for j >= 0 {
+			if _, ep := findEpisode(x.ctx[j], false); !ep {
+				break
+			}
 			x.releaseAt = append(x.releaseAt, j)
 			j--
 		}
@@ -297,6 +301,15 @@ func newVideo(p string, size int64) *video {
 		j--
 	}
 	x.inSeason = inSeason
+	// A named season pack ("Show.S01.1080p-GRP") that the folder above
+	// doesn't name (a downloads folder) has no title folder: its files
+	// are the title's by the pack's name.
+	pack := ""
+	if inSeason {
+		if name := packName(x.ctx[j+1]); name != "" && (j < 0 || !sameTitle(parseName(name), parseName(x.ctx[j]))) {
+			pack = x.ctx[j+1]
+		}
+	}
 
 	if m, ok := findEpisode(base, inSeason); ok && x.v.Extra == "" {
 		x.episode = true
@@ -334,6 +347,18 @@ func newVideo(p string, size int64) *video {
 		t--
 	}
 	x.titleAt = t
+	if pack != "" {
+		x.titleAt, x.releaseAt = -1, nil
+		// The pack's name: its files' may hold numbers the name can't be
+		// told from ("0747 Show S18E01", "Show 783 Episode"); their year
+		// when the pack has none.
+		n := parseName(pack)
+		if n.year == 0 && sameTitle(x.file, n) {
+			n.year = x.file.year
+		}
+		x.file.name, x.file.year = n.name, n.year
+		x.file.ids = x.file.ids.or(n.ids)
+	}
 	return x
 }
 

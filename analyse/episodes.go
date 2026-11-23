@@ -29,9 +29,11 @@ var (
 	// "Episode 2", "Ep02", "E02": the season comes from the folder.
 	episodeOnly = regexp.MustCompile(`(?i)(?:^|[^\pL0-9])((?:(?:episode|épisode|episodio|ep)[ ._-]?|e)(\d{1,4}))(?:[^\pL0-9]|$)`)
 	// More episodes after the first: "-E03", " - E03", "E03", "-03",
-	// "x03", "&E03". A number after a spaced hyphen is the episode's name
-	// ("S07E14 - 46 Minutes").
-	nextEpisode = regexp.MustCompile(`(?i)^(?:-e?|[ ._]-[ ._]?e|e|[ ._]?&[ ._]?e?|x)(\d{1,4})`)
+	// "x03", "&E03", or with the season again: "-S01E03", " - S01E03".
+	// A number after a spaced hyphen is the episode's name ("S07E14 - 46
+	// Minutes"). Group 1 is the season, when written again; group 2 the
+	// episode.
+	nextEpisode = regexp.MustCompile(`(?i)^(?:-e?|[ ._]-[ ._]?e|e|[ ._]?&[ ._]?e?|x|[ ._]?-[ ._]?s(\d{1,4})[ ._]?e)(\d{1,4})`)
 	// A bare episode number, said only in a season folder: "05 - Name",
 	// "Show - 05 - Name", "Show 05".
 	leadingNumber  = regexp.MustCompile(`^((\d{1,3}))(?:[ ._-]|$)`)
@@ -93,12 +95,18 @@ func withNext(s string, m []int, hasSeason bool) mark {
 		if after < len(s) && isAlnum(s[after]) {
 			break // "-1080p", "-02x": not an episode
 		}
-		next, _ := strconv.Atoi(s[k.end+n[2] : k.end+n[3]])
+		if n[2] >= 0 {
+			// The season again: only the same one continues the file.
+			if season, _ := strconv.Atoi(s[k.end+n[2] : k.end+n[3]]); !hasSeason || season != k.season {
+				break
+			}
+		}
+		next, _ := strconv.Atoi(s[k.end+n[4] : k.end+n[5]])
 		last := k.episodes[len(k.episodes)-1]
 		if next <= last || next > last+50 {
 			break
 		}
-		if strings.Contains(s[k.end:k.end+n[2]], "-") {
+		if strings.Contains(s[k.end:k.end+n[4]], "-") {
 			for e := last + 1; e < next; e++ {
 				k.episodes = append(k.episodes, e)
 			}
@@ -118,8 +126,24 @@ func isAlnum(c byte) bool {
 var (
 	seasonWord = regexp.MustCompile(`(?i)^(?:season|saison|staffel|temporada|stagione|seizoen|series|sæson|säsong|sezon|kausi)[ ._-]*(\d{1,4})(?:$|[^0-9])`)
 	seasonS    = regexp.MustCompile(`(?i)^s(\d{1,4})$`)
-	seasonPack = regexp.MustCompile(`(?i)(?:^|[ ._-])s(\d{1,2})(?:$|[ ._-])`)
+	// A season pack's marker after its name: "Show.S01.1080p", "Show
+	// S-01 MULTi", "Show - Saison 2", "Show.Season.3.WEB".
+	seasonPack = regexp.MustCompile(`(?i)(?:^|[ ._-])(?:s-?|(?:season|saison|staffel|temporada|stagione|seizoen)[ ._-]*)(\d{1,2})(?:$|[ ._()\[-])`)
 )
+
+// packName is the name before a season pack folder's marker
+// ("Show.S01.1080p" is "Show"); "" when the folder has none ("Season 1",
+// "S01") or isn't a pack.
+func packName(folder string) string {
+	if _, ok := seasonFolder(folder); !ok {
+		return ""
+	}
+	m := seasonPack.FindStringIndex(folder)
+	if m == nil || !hasName(folder[:m[0]]) {
+		return ""
+	}
+	return folder[:m[0]]
+}
 
 // specials are the names of season 0's folder.
 var specials = map[string]bool{"specials": true, "special": true, "speciaux": true, "spéciaux": true, "season 0": true}

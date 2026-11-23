@@ -12,11 +12,13 @@ For every video of a library it says:
   found in folder and file names (`[tmdbid-4821]`, `{tmdb-4821}`,
   `[imdbid-tt7654321]`, `[tvdbid-54321]`…);
 - an episode's **season and episode numbers**, multi-episode files included
-  (`S01E01-E02`, `S01E01E02`, `S01E01-02`, `1x01-02`, `1x01x02`), from the
+  (`S01E01-E02`, `S01E01E02`, `S01E01-02`, `S01E01-S01E02`, `1x01-02`, `1x01x02`), from the
   common notations (`S01E02`, `s1e2`, `S01.E02`, `1x02`,
   `Season 1 Episode 2`, `E02` or `Episode 2` or a bare `02 - Name` in a
   season folder) and season folders (`Season 1`, `S01`, `Saison 1`,
-  `Staffel 1`, `Specials`, a release's season pack `Show.S01.1080p…`);
+  `Staffel 1`, `Specials`, a release's season pack `Show.S01.1080p…`,
+  `Show - Saison 2`, `Show S-01 MULTi`; a season pack in a folder of
+  other titles, as downloads are, is its own title, named by the pack);
 - which files are **versions** of one title (same title folder, another
   quality or edition: `Bluray-2160p`, `Director's Cut`), with the label that
   tells them apart, and **parts** (`cd1`, `part 2`);
@@ -198,6 +200,33 @@ with how many stage 3 fixed, and stage 3's new failures.
 
 ```sh
 go run ./cmd/evaluate -stage 3 -offline -probes ~/analyser-corpus/probe.jsonl.gz
+```
+
+## The real-world evaluation
+
+The damages above are made by the evaluator itself. `-real` scores the
+analyser on a **downloads folder as it is** (release names and folders,
+season packs, copies wrapped in other folders) against the clean library
+the downloads were put in **as hardlinks**: a download and its library
+file share an inode, and the library file's path, read by stage 1, is
+the download's truth (its TMDB ID, season and episodes). Downloads
+without a library twin are counted apart, not scored.
+
+`-real-walk` makes the listing: one walk of `Films`, `Series` and
+`downloads` below `-real-root`, stat only (size, device, inode, path),
+nothing read. `-real` then analyses the downloads as one library and
+matches each title found (stage 2, and stage 3 with `-probes`, a
+download's probe being its twin's). It prints stage 1's fields (kind,
+season, episodes; single, multi-episode and season-pack files; extras),
+the TMDB IDs right per video and per title with the confidence's
+calibration, stage 2 beside stage 3, and the failures as patterns of
+the paths' traits ("season pack folder", "bare number", "no year"...),
+never a name. The listing and the `-debug` file hold real paths: keep
+them private, outside the repository.
+
+```sh
+go run ./cmd/evaluate -real-walk ~/analyser-corpus/realworld.tsv -real-root /mnt/media
+go run ./cmd/evaluate -real ~/analyser-corpus/realworld.tsv -tmdb-token ~/.config/tmdb-token
 ```
 
 ## How it's made

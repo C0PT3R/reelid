@@ -1,6 +1,8 @@
 package analyse
 
 import (
+	"fmt"
+	"maps"
 	"slices"
 	"testing"
 )
@@ -39,6 +41,12 @@ func TestParseName(t *testing.T) {
 		{"Back.to.the.Harbor.1990.720p", "Back to the Harbor", 1990, IDs{}, "720p"},
 		{"Call.Me.Later.2002.720p", "Call Me Later", 2002, IDs{}, "720p"},
 		{"example.com - Call.Me.Later.2002", "Call Me Later", 2002, IDs{}, ""},
+		{"Lantern.Bay.S02.MULTi.1080p.WEB-GRP", "Lantern Bay", 0, IDs{}, "S02.MULTi.1080p.WEB-GRP"},
+		{"Lantern Bay - Saison 2", "Lantern Bay", 0, IDs{}, "Saison 2"},
+		{"Lantern.Bay.S02.2012.1080p.WEB-GRP", "Lantern Bay", 0, IDs{}, "S02.2012.1080p.WEB-GRP"},
+		{"Lantern Bay - Saison 6 (2014)", "Lantern Bay", 0, IDs{}, "Saison 6 (2014"},
+		{"Lantern.Bay.2010.S02.1080p", "Lantern Bay", 2010, IDs{}, "S02.1080p"},
+		{"Lantern Bay S-01 MULTi [1080p]", "Lantern Bay", 0, IDs{}, "S-01 MULTi [1080p"},
 	}
 	for _, tt := range tests {
 		n := parseName(tt.in)
@@ -80,6 +88,9 @@ func TestFindEpisode(t *testing.T) {
 		{"Lantern Bay - S01E05 - 1985", false, 1, []int{5}},
 		{"Lantern Bay - S07E14 - 46 Hours", false, 7, []int{14}},
 		{"Lantern Bay - S01E01 - E02 - Two Parts", false, 1, []int{1, 2}},
+		{"Lantern Bay - S01E01 - S01E02 - Two Parts", false, 1, []int{1, 2}},
+		{"Lantern Bay.S01E01-S01E02.720p", false, 1, []int{1, 2}},
+		{"Lantern Bay - S01E01 - S02E02", false, 1, []int{1}},
 		{"Lantern Bay 1x02", false, 1, []int{2}},
 		{"Lantern Bay 1x01-02", false, 1, []int{1, 2}},
 		{"Lantern Bay 1x01x02", false, 1, []int{1, 2}},
@@ -109,6 +120,8 @@ func TestSeasonFolder(t *testing.T) {
 	for in, want := range map[string]int{
 		"Season 1": 1, "Season 01": 1, "season1": 1, "S02": 2, "Saison 3": 3, "Staffel 4": 4,
 		"Specials": 0, "Season 0": 0, "Lantern.Bay.S02.1080p.WEB-GRP": 2,
+		"Lantern Bay - Saison 2": 2, "Lantern.Bay.Season.3.WEB": 3, "Lantern Bay S-01 MULTi [1080p]": 1,
+		"Lantern Bay - Saison 6 (2014)": 6,
 	} {
 		if n, ok := seasonFolder(in); !ok || n != want {
 			t.Errorf("seasonFolder(%q) = %d %v, want %d", in, n, ok, want)
@@ -185,6 +198,37 @@ func TestReleaseFolderInSeason(t *testing.T) {
 	res := analyseTitles(t, "Lantern Bay (2018)/Season 1/Lantern.Bay.S01E02.1080p.WEB-GRP/lantern.bay.s01e02.1080p.web-grp.mkv")
 	if len(res.Titles) != 1 || res.Titles[0].Folder != "Lantern Bay (2018)" || res.Titles[0].Videos[0].Season != 1 {
 		t.Errorf("titles: %+v", res.Titles[0])
+	}
+}
+
+// Downloads as they are: season packs and release folders in a folder
+// of many titles, one wrapped in a copy's folder.
+func TestDownloads(t *testing.T) {
+	res := analyseTitles(t,
+		"complete/Lantern.Bay.S01.1080p.WEB-GRP/Lantern.Bay.S01E01.1080p.WEB-GRP.mkv",
+		"complete/Lantern.Bay.S01.1080p.WEB-GRP/Lantern.Bay.S01E02.1080p.WEB-GRP.mkv",
+		"complete/Lantern Bay - Saison 2/Lantern.Bay.S02E01.FRENCH.720p.mkv",
+		"complete/Quiet Harbor S-01 MULTi [1080p]/S01E01 - Pilot.mkv",
+		"complete/Quiet Harbor S-01 MULTi [1080p]/S01E02 - Storm.mkv",
+		"complete/Quiet Harbor S-01 MULTi [1080p]/0103 Quiet Harbor S01E03 - Tide.mkv",
+		"complete/Quiet Harbor S-01 MULTi [1080p]/Quiet Harbor 104 MULTI Calm.mkv",
+		"complete/Brass.Kite.2002.1080p.BluRay-GRP/Brass.Kite.2002.1080p.BluRay-GRP.mkv",
+		"complete/Amber.Rail.S03E04.720p.WEB-GRP.mkv",
+		"complete/Copper.Sky.1998.720p.mkv",
+		"copies/Teal.Rail.S01.WEB-GRP--1a2b3c/Teal.Rail.S01.WEB-GRP/Teal.Rail.S01E01.WEB-GRP.mkv",
+		"copies/Teal.Rail.S02E01.WEB-GRP--4d5e6f/Teal.Rail.S02E01.WEB-GRP/Teal.Rail.S02E01.WEB-GRP.mkv",
+		"copies/Long.Tale.2011.720p-GRP.mkv",
+	)
+	got := map[string]int{}
+	for _, ti := range res.Titles {
+		got[fmt.Sprintf("%s %s %d", ti.Kind, ti.Name, ti.Year)] += len(ti.Videos)
+	}
+	want := map[string]int{
+		"series Lantern Bay 0": 3, "series Quiet Harbor 0": 4, "film Brass Kite 2002": 1,
+		"series Amber Rail 0": 1, "film Copper Sky 1998": 1, "series Teal Rail 0": 2, "film Long Tale 2011": 1,
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("titles: %v, want %v", got, want)
 	}
 }
 

@@ -119,6 +119,12 @@ func parseName(s string) named {
 		}
 		restStart = nameEnd
 	}
+	// A season pack's marker ends the name too ("Show.S01.MULTi", "Show -
+	// Saison 2"); a year after it is the season's, not the title's
+	// ("Show.S02.2012.1080p").
+	if m := seasonPack.FindStringIndex(s); m != nil && m[0] < nameEnd && hasName(s[:m[0]]) {
+		nameEnd, restStart, n.year = m[0], m[0], 0
+	}
 	n.name = cleanName(s[:nameEnd])
 	n.rest = strings.Trim(s[restStart:], " -._()[]{}")
 	return n

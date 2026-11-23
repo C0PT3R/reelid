@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/overfin/analyser/tmdb"
 )
@@ -82,7 +83,25 @@ func main() {
 	offline := flag.Bool("offline", false, "stage 2: answer from the cache only, never ask TMDB")
 	rate := flag.Float64("rate", 15, "stage 2: at most this many requests to TMDB a second")
 	workers := flag.Int("workers", 6, "stage 2: titles matched at once")
+	realWalk := flag.String("real-walk", "", "real-world evaluation: walk -real-root's trees (stat only) into this listing (keep it private)")
+	realRoot := flag.String("real-root", "", "real-world evaluation: the folder holding Films, Series and downloads")
+	real := flag.String("real", "", "real-world evaluation: score the analyser on the downloads of this listing (see -real-walk)")
 	flag.Parse()
+
+	if *realWalk != "" {
+		if err := walkReal(*realRoot, *realWalk); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *real != "" {
+		if err := runRealStages(*real, *probes, *cache, *tokenFile, *offline, *rate, *workers, *top, *debug); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	c, err := readCorpus(*key)
 	if err != nil {
@@ -181,6 +200,44 @@ func runStage2(c *corpus, cache, tokenFile string, offline bool, rate float64, w
 	} else {
 		err = stage2(context.Background(), c, client, max(1, workers), only, top, write)
 	}
+	fmt.Printf("\nTMDB: %d requests made, %d answers from the cache\n", client.Requests(), client.Hits())
+	return err
+}
+
+// runRealStages makes the TMDB client and runs the real-world
+// evaluation, then says how many requests went to TMDB.
+func runRealStages(listing, probes, cache, tokenFile string, offline bool, rate float64, workers, top int, debug string) error {
+	token := ""
+	if !offline {
+		if tokenFile == "" {
+			return fmt.Errorf("say where TMDB's token is (-tmdb-token or TMDB_TOKEN_FILE), or run -offline")
+		}
+		var err error
+		if token, err = tmdb.ReadToken(tokenFile); err != nil {
+			return err
+		}
+	}
+	if err := outsideRepository(cache); err != nil {
+		return fmt.Errorf("-tmdb-cache: %w", err)
+	}
+	client := tmdb.NewClient(token, cache, rate)
+	client.Offline = offline
+	var write func(string)
+	if debug != "" {
+		if err := outsideRepository(debug); err != nil {
+			return err
+		}
+		out, err := os.OpenFile(debug, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			return err
+		}
+		defer out.Close()
+		w := bufio.NewWriter(out)
+		defer w.Flush()
+		var mu sync.Mutex
+		write = func(line string) { mu.Lock(); fmt.Fprintln(w, line); mu.Unlock() }
+	}
+	err := runReal(listing, probes, client, max(1, workers), top, write)
 	fmt.Printf("\nTMDB: %d requests made, %d answers from the cache\n", client.Requests(), client.Hits())
 	return err
 }
