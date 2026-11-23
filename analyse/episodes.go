@@ -207,8 +207,13 @@ func packName(folder string) string {
 // specials are the names of season 0's folder.
 var specials = map[string]bool{"specials": true, "special": true, "speciaux": true, "spéciaux": true, "season 0": true}
 
+// crossSeed is the mark a cross-seeding tool puts after a folder's name:
+// "--" and eight hexadecimal digits ("S02--8d89089f").
+var crossSeed = regexp.MustCompile(`--[0-9a-f]{8}$`)
+
 // seasonFolder says which season a folder name stands for.
 func seasonFolder(name string) (int, bool) {
+	name = crossSeed.ReplaceAllString(name, "")
 	if specials[strings.ToLower(strings.TrimSpace(name))] {
 		return 0, true
 	}

@@ -2,6 +2,7 @@ package match
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/C0PT3R/reelid/analyse"
@@ -195,6 +196,9 @@ func TestSimilarity(t *testing.T) {
 		{"quiet harbor", "quiet harbor 2", 0.6},
 		{"quiet harbor", "loud harbor", 0.25},
 		{"one", "two", 0},
+		{"lantern gardans", "lantern gardens", 0.8},
+		{"copper moths", "copper moth", 0.8},
+		{"moths", "moth", 0}, // too short to forgive
 	}
 	for _, tt := range tests {
 		if got := similarity(tt.a, tt.b); got != tt.want {
@@ -322,5 +326,69 @@ func TestRuntimeFit(t *testing.T) {
 		if got, _ := runtimeFit(tt.minutes*60, tt.runtime); got != tt.want {
 			t.Errorf("runtimeFit(%v min, %d) = %d, want %d", tt.minutes, tt.runtime, got, tt.want)
 		}
+	}
+}
+
+func TestNearNames(t *testing.T) {
+	f := &fake{titles: []tmdb.Details{
+		series(20, "Copper Moth", 2019, 5, 8),
+		film(22, "Harbor Lights Return", 2011, 9),
+	}}
+	tests := []struct {
+		name string
+		q    Query
+		id   int
+		conf Confidence
+	}{
+		// A plural's "s" the search doesn't forgive: searched again
+		// without it; a slip alone is never sure.
+		{"plural slip", Query{Kind: analyse.Show, Name: "Copper Moths"}, 20, Check},
+		{"season's number after the name", Query{Kind: analyse.Show, Name: "Copper Moth 01"}, 20, Check},
+		{"a name that starts the other, alone of its kind", Query{Kind: analyse.Film, Name: "Harbor Lights", Year: 2011}, 22, Sure},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := Match(context.Background(), f, tt.q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Best == nil || res.Best.ID != tt.id || res.Confidence != tt.conf {
+				t.Errorf("got %+v (%s), want %d (%s)", res.Best, res.Confidence, tt.id, tt.conf)
+			}
+		})
+	}
+}
+
+func TestNotSureWhenLengthsSayNo(t *testing.T) {
+	// The best by far, but its length far from TMDB's, beside a namesake:
+	// to check. Alone of its name: sure all the same.
+	best := Candidate{ID: 30, Score: 60, Why: []string{"name", "year", "runtime off"}, nameSim: 1}
+	namesake := Candidate{ID: 31, Score: 30, Why: []string{"name", "year off"}, nameSim: 1}
+	other := Candidate{ID: 32, Score: 20, Why: []string{"name"}, nameSim: 0.4}
+	if res := decide([]Candidate{best, namesake}); res.Confidence != Check {
+		t.Errorf("beside a namesake: %s, want to check", res.Confidence)
+	}
+	if res := decide([]Candidate{best, other}); res.Confidence != Sure {
+		t.Errorf("alone of its name: %s, want sure", res.Confidence)
+	}
+}
+
+func TestTranslatedTitleFoundByItsDetails(t *testing.T) {
+	// Searched by its French name, the film comes after others whose own
+	// names are nearer; its translation is only known from its details.
+	var titles []tmdb.Details
+	for i := range 8 {
+		titles = append(titles, film(40+i, fmt.Sprintf("Le Phare %d", i+2), 2013, float64(20-i)))
+	}
+	truth := film(60, "The Lighthouse Keeper", 2013, 1)
+	truth.Translations = []string{"Le Phare"}
+	titles = append(titles, truth)
+	f := &fake{titles: titles} // it finds titles by their translations too, as TMDB does
+	res, err := Match(context.Background(), f, Query{Kind: analyse.Film, Name: "Le Phare", Year: 2013})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Best == nil || res.Best.ID != 60 {
+		t.Errorf("got %+v (%s), want 60", res.Best, res.Confidence)
 	}
 }

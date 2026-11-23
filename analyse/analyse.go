@@ -147,6 +147,7 @@ type video struct {
 	fullBase string   // its file name without the extension
 	ctx      []string // the folders that tell its title: above an extras folder
 	file     named    // what its file name says of the title
+	own      named    // what its file name alone says, before a pack's name
 	episode  bool     // whether it is an episode
 	inSeason bool     // whether it is in a season folder
 	// titleAt is the index in ctx of the title's folder; -1 for none.
@@ -191,6 +192,7 @@ func Analyse(entries []Entry) Result {
 	byKey := map[string]*Title{}
 	var keys []string
 	var extras []*video
+	members := map[*Title][]*video{}
 	for _, x := range videos {
 		if x.v.Extra != "" {
 			extras = append(extras, x)
@@ -204,6 +206,10 @@ func Analyse(entries []Entry) Result {
 			keys = append(keys, key)
 		}
 		t.add(x)
+		members[t] = append(members[t], x)
+	}
+	for t, xs := range members {
+		t.nameByFiles(xs)
 	}
 	for _, x := range extras {
 		t := extraTitle(x, byKey, &keys)
@@ -368,6 +374,7 @@ func newVideo(p string, size int64) *video {
 		t--
 	}
 	x.titleAt = t
+	x.own = x.file
 	if pack != "" {
 		x.titleAt, x.releaseAt = -1, nil
 		// The pack's name: its files' may hold numbers the name can't be
@@ -393,6 +400,42 @@ func findTitleFolders(videos []*video) {
 		if x.titleAt >= 0 && x.v.Extra == "" && !x.inSeason {
 			f := strings.Join(x.ctx[:x.titleAt+1], "/")
 			byFolder[f] = append(byFolder[f], x)
+		}
+	}
+	// Above season folders, a folder is a series' whatever its files
+	// say; unless its episodes, named with their numbers, name several
+	// series, each in two files or more (a downloads folder holding
+	// "S01/Show.S01E01…" and "S01/Other.S01E01…").
+	inSeason := map[string][]*video{}
+	for _, x := range videos {
+		if x.titleAt >= 0 && x.v.Extra == "" && x.inSeason && len(x.v.Episodes) > 0 && Key(x.own.name) != "" {
+			f := strings.Join(x.ctx[:x.titleAt+1], "/")
+			inSeason[f] = append(inSeason[f], x)
+		}
+	}
+	for _, xs := range inSeason {
+		var shows []named
+		counts := map[int]int{}
+		for _, x := range xs {
+			i := slices.IndexFunc(shows, func(n named) bool { return sameTitle(n, x.own) })
+			if i < 0 {
+				shows = append(shows, x.own)
+				i = len(shows) - 1
+			}
+			counts[i]++
+		}
+		several := 0
+		for _, n := range counts {
+			if n >= 2 {
+				several++
+			}
+		}
+		if several < 2 {
+			continue
+		}
+		for _, x := range xs {
+			x.titleAt, x.releaseAt = -1, nil
+			x.file = x.own
 		}
 	}
 	for _, xs := range byFolder {
@@ -463,6 +506,45 @@ func (t *Title) add(x *video) {
 	}
 	t.IDs = t.IDs.or(n.ids)
 	t.Videos = append(t.Videos, x.v)
+}
+
+// nameByFiles names a series by its files when its folder (or pack)
+// names it otherwise and says nothing more (no year, no ID): episodes
+// all named alike, in a folder named as downloads are ("complete",
+// "Show 01 MULTi" for "Show - S01E01").
+func (t *Title) nameByFiles(xs []*video) {
+	if t.Kind != Show {
+		return
+	}
+	// What the folder (or else the title) says beside its name.
+	says := named{year: t.Year, ids: t.IDs}
+	if t.Folder != "" {
+		says = parseName(path.Base(t.Folder))
+	}
+	if says.year != 0 || !says.ids.Empty() {
+		return
+	}
+	var own named
+	n := 0
+	for _, x := range xs {
+		if Key(x.own.name) == "" {
+			continue
+		}
+		if n > 0 && !sameTitle(own, x.own) {
+			return // the files disagree: the folder's name stays
+		}
+		if n == 0 || len(x.own.name) < len(own.name) {
+			own = x.own
+		}
+		n++
+	}
+	if n < 2 || n*2 < len(xs) || sameTitle(own, named{name: t.Name}) || !own.ids.Empty() {
+		return
+	}
+	t.Name = own.name
+	if own.year != 0 {
+		t.Year = own.year
+	}
 }
 
 // extraTitle finds the title an extra belongs to, or makes one for its

@@ -109,6 +109,13 @@ func parseName(s string) named {
 				nameEnd, restStart = at, at+4
 			}
 		}
+		// A year after an edition's or a language's tags
+		// ("Name.EXTENDED.2016.1080p"): the name ends at the tags.
+		if n.year == 0 && limit < len(s) && hasName(s[:limit]) {
+			if y := yearAfterTags(s[limit:]); y > 0 {
+				n.year, nameEnd, restStart = y, limit, limit
+			}
+		}
 	}
 	if n.year == 0 {
 		// Without a year, the name stops where the release's description or
@@ -126,8 +133,45 @@ func parseName(s string) named {
 		nameEnd, restStart, n.year = m[0], m[0], 0
 	}
 	n.name = cleanName(s[:nameEnd])
+	// A language's or a site's tag in brackets after the name ("Name
+	// [FR-EN] (2012)"), and a pack's "Complete" or "Intégrale" ("Show
+	// Complete FRENCH", "Show - L'Intégrale S01 à S03"), aren't the name's.
+	for {
+		name := strings.TrimSpace(trailingBracket.ReplaceAllString(n.name, ""))
+		if w := strings.Fields(name); len(w) >= 2 && wholePack[strings.ToLower(w[len(w)-1])] {
+			name = strings.Join(w[:len(w)-1], " ")
+		}
+		name = strings.Trim(name, " -._([{,")
+		if name == n.name || !hasName(name) {
+			break
+		}
+		n.name = name
+	}
 	n.rest = strings.Trim(s[restStart:], " -._()[]{}")
 	return n
+}
+
+// trailingBracket is a bracketed tag at the end of a name.
+var trailingBracket = regexp.MustCompile(`\s*\[[^\[\]]*\]$`)
+
+// wholePack are the words that say a release holds a whole series.
+var wholePack = map[string]bool{"complete": true, "integrale": true, "intégrale": true, "l'integrale": true, "l'intégrale": true, "l’intégrale": true}
+
+// yearAfterTags is the year that follows a release's first words when
+// they are all tags ("EXTENDED.2016.1080p" is 2016); 0 for none.
+func yearAfterTags(s string) int {
+	for _, w := range strings.FieldsFunc(s, func(r rune) bool { return r < 128 && isWordSep(byte(r)) }) {
+		if isTag(w) {
+			continue
+		}
+		if len(w) == 4 && isDigits(w) {
+			if y, _ := strconv.Atoi(w); y >= 1900 && y < 2100 {
+				return y
+			}
+		}
+		return 0
+	}
+	return 0
 }
 
 // years finds where years are in s: four digits from 1900 to 2099 with a

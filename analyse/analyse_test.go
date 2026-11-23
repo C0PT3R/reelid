@@ -47,6 +47,12 @@ func TestParseName(t *testing.T) {
 		{"Lantern Bay - Saison 6 (2014)", "Lantern Bay", 0, IDs{}, "Saison 6 (2014"},
 		{"Lantern.Bay.2010.S02.1080p", "Lantern Bay", 2010, IDs{}, "S02.1080p"},
 		{"Lantern Bay S-01 MULTi [1080p]", "Lantern Bay", 0, IDs{}, "S-01 MULTi [1080p"},
+		{"Quiet Harbor [FR-EN] (2012)", "Quiet Harbor", 2012, IDs{}, ""},
+		{"Saga.of.the.Copper.Kite.Complete.FRENCH.WEBDL.1080p", "Saga of the Copper Kite", 0, IDs{}, "FRENCH.WEBDL.1080p"},
+		{"Lantern Bay - L'Intégrale S01 à S03 FRENCH", "Lantern Bay", 0, IDs{}, "S01 à S03 FRENCH"},
+		{"A Complete Stranger (2019)", "A Complete Stranger", 2019, IDs{}, ""},
+		{"Quiet.Harbor.EXTENDED.2016.MULTI.1080p.BluRay-GRP", "Quiet Harbor", 2016, IDs{}, "EXTENDED.2016.MULTI.1080p.BluRay-GRP"},
+		{"Quiet.Harbor.FRENCH.1080p.2016", "Quiet Harbor", 0, IDs{}, "FRENCH.1080p.2016"},
 	}
 	for _, tt := range tests {
 		n := parseName(tt.in)
@@ -405,5 +411,33 @@ func TestEpisodeNamesAndNumbers(t *testing.T) {
 		if got[p] != want {
 			t.Errorf("%s: got %s, want %s", p, got[p], want)
 		}
+	}
+}
+
+func TestSeriesNamedByFiles(t *testing.T) {
+	// A season folder right in a downloads folder, a pack misnamed, a
+	// cross-seeding tool's folder: the files' own name is the series'; a
+	// downloads folder holding two series' seasons is split.
+	res := Analyse([]Entry{
+		{Path: "complete/S01/Copper.Moth.S01E01.MULTi.1080p.WEB-GRP.mkv"},
+		{Path: "complete/S01/Copper.Moth.S01E02.MULTi.1080p.WEB-GRP.mkv"},
+		{Path: "Iron Lantrn 01 MULTi 1080p-GRP/Iron Lantern - S01E01 - Pilot 1080p.mkv"},
+		{Path: "Iron Lantrn 01 MULTi 1080p-GRP/Iron Lantern - S01E02 - Second 1080p.mkv"},
+		{Path: "Lantern Bay (2010)/Season 1/Bay of Kites - S01E01.mkv"},
+		{Path: "Lantern Bay (2010)/Season 1/Bay of Kites - S01E02.mkv"},
+		{Path: "done/S02/Paper.Comets.S02E01.1080p-GRP.mkv"},
+		{Path: "done/S02/Paper.Comets.S02E02.1080p-GRP.mkv"},
+		{Path: "done/S02/Glass.Orchard.S02E01.1080p-GRP.mkv"},
+		{Path: "done/S02/Glass.Orchard.S02E02.1080p-GRP.mkv"},
+		{Path: "seeding/S03--0a1b2c3d/S03/Salt.Meadow.S03E01.720p-GRP.mkv"},
+		{Path: "seeding/S03--0a1b2c3d/S03/Salt.Meadow.S03E02.720p-GRP.mkv"},
+	})
+	var names []string
+	for _, title := range res.Titles {
+		names = append(names, title.Name)
+	}
+	slices.Sort(names)
+	if want := []string{"Copper Moth", "Glass Orchard", "Iron Lantern", "Lantern Bay", "Paper Comets", "Salt Meadow"}; !slices.Equal(names, want) {
+		t.Errorf("names %q, want %q", names, want)
 	}
 }

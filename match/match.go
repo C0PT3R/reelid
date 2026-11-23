@@ -71,9 +71,11 @@ type Candidate struct {
 	Score int       `json:"score"`
 	// Why are the score's parts, for reading it ("name 50", "year 20"…).
 	Why []string `json:"why,omitempty"`
-	// popularity breaks ties; nameSim is how alike its best name is.
+	// popularity breaks ties; nameSim is how alike its best name is;
+	// slip whether the paths' name is near it only by a slip of a letter.
 	popularity float64
 	nameSim    float64
+	slip       bool
 }
 
 // qualifier is a country or a region after a series' name, as Sonarr
@@ -112,6 +114,9 @@ const (
 	// weighedWithLengths are weighed when the files' lengths are known:
 	// then more of the same name can be told apart by their lengths.
 	weighedWithLengths = 6
+	// weighedWide are weighed in all when the best few leave the match
+	// unsure.
+	weighedWide = 10
 	// Sure from sureScore with sureMargin over the next; or, without a
 	// year to confirm it, from nameScore with a wide margin.
 	sureScore, sureMargin = 60, 15
@@ -243,6 +248,21 @@ func (w *weighing) search(ctx context.Context, src tmdb.Source, kinds []tmdb.Kin
 		}
 	}
 
+	// Nothing named so at all: the name may be misspelt ("Earths" for
+	// "Earth", a season's number after it); it is searched again as it
+	// would be without the slip.
+	if len(w.names) > 0 && w.names[0].weight == 1 && !slices.ContainsFunc(found, func(f tmdb.Found) bool { return nearlyNamed(w.names[0].key, f) }) {
+		for _, v := range variants(w.names[0].key) {
+			for _, kind := range kinds {
+				list, err := src.Search(ctx, kind, v, 0)
+				if err != nil {
+					return nil, err
+				}
+				add(list)
+			}
+		}
+	}
+
 	// A first weighing with the names the search gives; the best few are
 	// then weighed again with all their names, seasons and lengths.
 	cands := make([]Candidate, 0, len(found))
@@ -275,23 +295,79 @@ func (w *weighing) search(ctx context.Context, src tmdb.Source, kinds []tmdb.Kin
 			}
 		}
 	}
-	for _, i := range close {
-		d, err := src.Details(ctx, cands[i].Kind, cands[i].ID)
-		if errors.Is(err, tmdb.ErrNotFound) {
-			continue
+	done := map[tmdb.Kind]map[int]bool{tmdb.Movie: {}, tmdb.TV: {}}
+	weighClose := func(close []int) error {
+		for _, i := range close {
+			done[cands[i].Kind][cands[i].ID] = true
+			d, err := src.Details(ctx, cands[i].Kind, cands[i].ID)
+			if errors.Is(err, tmdb.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			d.Popularity = cands[i].popularity // from the search, as for every candidate
+			fit, why, err := lengthsFit(ctx, src, w.q.Lengths, d)
+			if err != nil {
+				return err
+			}
+			cands[i] = w.weigh(d, penalty, fit, why)
 		}
-		if err != nil {
-			return nil, err
-		}
-		d.Popularity = cands[i].popularity // from the search, as for every candidate
-		fit, why, err := lengthsFit(ctx, src, w.q.Lengths, d)
-		if err != nil {
-			return nil, err
-		}
-		cands[i] = w.weigh(d, penalty, fit, why)
+		sortCandidates(cands)
+		return nil
 	}
-	sortCandidates(cands)
+	if err := weighClose(close); err != nil {
+		return nil, err
+	}
+	// Not sure yet: more are weighed closely, up to weighedWide, those of
+	// the year said and those named as the paths say first: a title named
+	// in another language (a translation the search found it by) or one
+	// of several of one name is known only by its details.
+	if decide(cands).Confidence != Sure {
+		var more []int
+		for _, pass := range []func(Candidate) bool{
+			func(c Candidate) bool { return w.q.Year > 0 && c.Year == w.q.Year || c.nameSim >= 0.9 },
+			func(Candidate) bool { return true },
+		} {
+			for i, c := range cands {
+				if len(done[tmdb.Movie])+len(done[tmdb.TV])+len(more) >= weighedWide {
+					break
+				}
+				if !done[c.Kind][c.ID] && !slices.Contains(more, i) && pass(c) {
+					more = append(more, i)
+				}
+			}
+		}
+		if err := weighClose(more); err != nil {
+			return nil, err
+		}
+	}
 	return cands, nil
+}
+
+// nearlyNamed says whether a search result is named key or nearly so.
+func nearlyNamed(key string, f tmdb.Found) bool {
+	return similarity(key, analyse.Key(f.Name)) >= 0.9 || similarity(key, analyse.Key(f.OriginalName)) >= 0.9
+}
+
+// variants are a name as it would be without a common slip: a number
+// after it (a season's, "Show 01"), a plural's "s" on its last word.
+func variants(key string) []string {
+	var out []string
+	words := strings.Fields(key)
+	if len(words) >= 2 && isNumber(words[len(words)-1]) {
+		out = append(out, strings.Join(words[:len(words)-1], " "))
+		words = words[:len(words)-1]
+	}
+	if last := words[len(words)-1]; len(words) >= 2 && len(last) > 3 && strings.HasSuffix(last, "s") {
+		out = append(out, strings.Join(append(slices.Clone(words[:len(words)-1]), last[:len(last)-1]), " "))
+	}
+	return out
+}
+
+func isNumber(w string) bool {
+	_, err := strconv.Atoi(w)
+	return err == nil
 }
 
 // named says whether a search result is named key exactly.
@@ -315,24 +391,29 @@ func (w *weighing) weigh(d *tmdb.Details, penalty, lengths int, lengthsWhy strin
 	// The name: the paths', or a tag's (counting less), whichever fits
 	// best. The year: the paths'; or, when they say none, a tag's, for a
 	// candidate both names fit (see tagYearSim).
-	simOf := func(key string) float64 {
-		sim := 0.0
+	// simOf is how alike a name is to this title's nearest name, and
+	// whether only by a slip of a letter or two (see fuzzy).
+	simOf := func(key string) (float64, bool) {
+		sim, slip := 0.0, false
 		for i, name := range d.Names() {
-			s := similarity(key, analyse.Key(name))
+			k := analyse.Key(name)
+			s := similarity(key, k)
 			if i >= 2+len(d.Translations) {
 				s *= altNameWeight
 			}
-			sim = max(sim, s)
+			if s > sim {
+				sim, slip = s, fuzzy(key, k)
+			}
 		}
-		return sim
+		return sim, slip
 	}
 	paths, tagSim, tagYear := 0.0, 0.0, 0
 	hasPaths := len(w.names) > 0 && w.names[0].weight == 1
 	for _, n := range w.names {
-		sim := simOf(n.key)
+		sim, slip := simOf(n.key)
 		switch {
 		case n.weight == 1:
-			paths = sim
+			paths, c.slip = sim, slip
 		case sim > tagSim || sim == tagSim && tagYear == 0:
 			tagSim, tagYear = sim, n.year
 		}
@@ -431,7 +512,7 @@ func decide(cands []Candidate) Result {
 	if len(cands) > 1 {
 		margin = best.Score - cands[1].Score
 	}
-	if best.Score >= sureScore && margin >= sureMargin || best.Score >= nameScore && margin >= wideMargin {
+	if (best.Score >= sureScore && margin >= sureMargin || best.Score >= nameScore && margin >= wideMargin) && !doubtful(best, cands[1:]) {
 		res.Confidence = Sure
 		return res
 	}
@@ -441,6 +522,23 @@ func decide(cands []Candidate) Result {
 		}
 	}
 	return res
+}
+
+// doubtful says whether a candidate can't be sure whatever its score:
+// when its length, its episodes' lengths or its seasons say it isn't
+// the one and another is named as well (a remake, a namesake); or when
+// the paths' name is near its only by a slip of a letter or two.
+func doubtful(c Candidate, others []Candidate) bool {
+	if c.slip && slices.Contains(c.Why, "name") {
+		return true
+	}
+	for _, why := range c.Why {
+		switch why {
+		case "runtime off", "lengths off", "seasons misfit":
+			return slices.ContainsFunc(others, func(o Candidate) bool { return o.nameSim >= c.nameSim })
+		}
+	}
+	return false
 }
 
 // sortCandidates puts the best first: by score, then by popularity, then
@@ -482,7 +580,64 @@ func similarity(a, b string) float64 {
 			common++
 		}
 	}
-	return 0.5 * 2 * float64(common) / float64(len(wa)+len(wb))
+	share := 0.5 * 2 * float64(common) / float64(len(wa)+len(wb))
+	// A slip of a letter or two in a long enough name ("Earths" for
+	// "Earth", "You" for "Your"): near, but never as much as the name.
+	if slipped(a, b) {
+		return max(share, fuzzySim)
+	}
+	return share
+}
+
+func slipped(a, b string) bool {
+	return min(len(a), len(b)) >= minFuzzy && letterSimilarity(a, b) >= fuzzyRatio
+}
+
+// fuzzy says whether two names' keys are alike only by a slip of a
+// letter or two (similarity's tolerance), not as the same name written
+// otherwise.
+func fuzzy(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	a, b = numerals(a), numerals(b)
+	if a == b || strings.ReplaceAll(a, " ", "") == strings.ReplaceAll(b, " ", "") || withoutArticle(a) == withoutArticle(b) {
+		return false
+	}
+	return slipped(a, b) && similarity(a, b) == fuzzySim
+}
+
+// The tolerance on names: two names at least minFuzzy letters long that
+// differ by a letter or two (fuzzyRatio of their letters the same, by
+// edit distance) are fuzzySim alike; a name so alike alone is never a
+// sure match (see decide).
+const (
+	minFuzzy   = 8
+	fuzzyRatio = 0.88
+	fuzzySim   = 0.8
+)
+
+// letterSimilarity is 1 less the edit distance between two strings over
+// the longer's length.
+func letterSimilarity(a, b string) float64 {
+	ra, rb := []rune(a), []rune(b)
+	prev := make([]int, len(rb)+1)
+	cur := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		cur[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev, cur = cur, prev
+	}
+	return 1 - float64(prev[len(rb)])/float64(max(len(ra), len(rb)))
 }
 
 // articles are the words that may start a name or not ("The Name",

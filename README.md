@@ -11,7 +11,10 @@ For every video of a library it says:
 - whether it is a **film** or an **episode**, and which **title** it belongs
   to: the title's name and year as the names write them, and the **ID tags**
   found in folder and file names (`[tmdbid-4821]`, `{tmdb-4821}`,
-  `[imdbid-tt7654321]`, `[tvdbid-54321]`…);
+  `[imdbid-tt7654321]`, `[tvdbid-54321]`…); a series is named by its
+  files when its folder names it otherwise and says nothing more (a
+  downloads folder, `Show 01 MULTi` for `Show - S01E01`), and a folder
+  whose episodes name several series is split;
 - an episode's **season and episode numbers**, multi-episode files included
   (`S01E01-E02`, `S01E01E02`, `S01E01-02`, `S01E01-S01E02`, `1x01-02`, `1x01x02`), from the
   common notations (`S01E02`, `s1e2`, `S01.E02`, `1x02`,
@@ -112,7 +115,8 @@ are weighed:
   results their **translations and alternative titles** too (fetched for
   those three only); the same name counts most, then the name written
   together or apart, with or without its article, Roman numerals as
-  digits; a name that starts the other, or shares words, counts less;
+  digits; a name that starts the other, or shares words, counts less,
+  and so does a long name a letter or two off (`Earths` for `Earth`);
 - the **year**: the same, one off (close), or further (against);
 - the **kind**: when the paths said a film and nothing fits, series are
   searched too (and the other way), a little behind;
@@ -120,8 +124,18 @@ are weighed:
   number is beyond TMDB's count (from `tv/{id}`);
 - **popularity** only breaks ties.
 
+When no result is named so at all, the name is searched again as it
+would be without a common slip (a season's number after it, a plural's
+`s`). When the best few leave the match unsure, more results are
+weighed closely (up to ten, those of the year said and those of the
+name first): a title named in another language, or one of several of
+one name, is only known by its details.
+
 The best is taken, **sure** when it scores well with a clear margin over
-the next; otherwise **to check**, with the close candidates beside it.
+the next, and nothing says it isn't the one (a length far from TMDB's
+or seasons TMDB doesn't have, beside another title of its name; a name
+only near the paths'); otherwise **to check**, with the close candidates
+beside it.
 
 TMDB is a free service, so the client (`tmdb/`) is careful with it:
 
