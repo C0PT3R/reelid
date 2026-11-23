@@ -71,6 +71,51 @@ type Details struct {
 type Episode struct {
 	Number  int
 	Runtime int // in minutes; 0 when TMDB doesn't say
+	// Name is its name (in English, TMDB's default); AirDate when it was
+	// first aired ("2001-05-18"), "" when TMDB doesn't say.
+	Name, AirDate string
+}
+
+// Order is one of a series' other orders on TMDB (an "episode group"):
+// the aired order, the DVD's, an absolute numbering… made by TMDB's
+// users, so its name says little and its type a little more.
+type Order struct {
+	ID       string
+	Name     string
+	Type     OrderType
+	Groups   int // how many seasons (or parts) it has
+	Episodes int // how many episodes it places
+}
+
+// OrderType is the kind of an order, as TMDB numbers them.
+type OrderType int
+
+// The kinds of orders.
+const (
+	OriginalAirDate OrderType = 1
+	Absolute        OrderType = 2
+	DVD             OrderType = 3
+	Digital         OrderType = 4
+	StoryArc        OrderType = 5
+	Production      OrderType = 6
+	TVOrder         OrderType = 7
+)
+
+// OrderSeason is one season (group) of an order: its name, its place
+// among the order's seasons, and its episodes in the order's sequence,
+// each with its place in TMDB's default order (Season, Number).
+type OrderSeason struct {
+	Name     string
+	Order    int
+	Episodes []Placed
+}
+
+// Placed is an episode as an order lists it: its place in TMDB's default
+// order, its length and name.
+type Placed struct {
+	Season, Number int
+	Runtime        int
+	Name, AirDate  string
 }
 
 // Names are all the names of the title: its own, its original, its
@@ -96,6 +141,11 @@ type Source interface {
 	// FindIMDb gives the titles TMDB knows by an IMDb ID ("tt7654321"),
 	// films and series; none when it knows none.
 	FindIMDb(ctx context.Context, imdb string) ([]Found, error)
+	// Orders are a series' other orders (episode groups); none when it
+	// has none.
+	Orders(ctx context.Context, id int) ([]Order, error)
+	// OrderSeasons are an order's seasons, in the order's sequence.
+	OrderSeasons(ctx context.Context, order string) ([]OrderSeason, error)
 }
 
 // yearOf reads the year of a TMDB date ("2001-05-18"); 0 for none.

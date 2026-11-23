@@ -39,7 +39,15 @@ func fakeTMDB(t *testing.T, tooMany int) (*httptest.Server, *atomic.Int64) {
 				"alternative_titles":{"results":[{"title":"The Northern Line"}]},
 				"translations":{"translations":[{"data":{"name":"Ligne du Nord"}},{"data":{"name":""}}]}}`))
 		case "/tv/10/season/1":
-			w.Write([]byte(`{"season_number":1,"episodes":[{"episode_number":1,"runtime":52},{"episode_number":2,"runtime":null}]}`))
+			w.Write([]byte(`{"season_number":1,"episodes":[{"episode_number":1,"runtime":52,"name":"Departure","air_date":"2010-01-01"},{"episode_number":2,"runtime":null}]}`))
+		case "/tv/10/episode_groups":
+			w.Write([]byte(`{"results":[{"id":"abc","name":"DVD Order","type":3,"group_count":2,"episode_count":3}]}`))
+		case "/tv/episode_group/abc":
+			w.Write([]byte(`{"groups":[
+				{"name":"Volume 2","order":2,"episodes":[{"season_number":1,"episode_number":3,"order":0,"runtime":50,"name":"Third"}]},
+				{"name":"Volume 1","order":1,"episodes":[
+					{"season_number":1,"episode_number":2,"order":1,"name":"Second"},
+					{"season_number":1,"episode_number":1,"order":0,"name":"First","air_date":"2010-01-01"}]}]}`))
 		case "/find/tt0000042":
 			if r.URL.Query().Get("external_source") != "imdb_id" {
 				w.WriteHeader(http.StatusBadRequest)
@@ -133,6 +141,24 @@ func TestSeasonAndFind(t *testing.T) {
 	}
 	if _, err := c.Season(ctx, 10, 7); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing season: got %v, want not found", err)
+	}
+	if eps[0].Name != "Departure" || eps[0].AirDate != "2010-01-01" {
+		t.Errorf("season: names and dates not read: %+v", eps[0])
+	}
+	orders, err := c.Orders(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orders) != 1 || orders[0].ID != "abc" || orders[0].Type != DVD || orders[0].Groups != 2 {
+		t.Errorf("orders: got %+v", orders)
+	}
+	groups, err := c.OrderSeasons(ctx, "abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 2 || groups[0].Name != "Volume 1" || len(groups[0].Episodes) != 2 ||
+		groups[0].Episodes[0].Name != "First" || groups[0].Episodes[1].Number != 2 || groups[1].Episodes[0].Runtime != 50 {
+		t.Errorf("order seasons: got %+v", groups)
 	}
 	found, err := c.FindIMDb(ctx, "tt0000042")
 	if err != nil {

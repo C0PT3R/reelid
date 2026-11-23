@@ -78,6 +78,14 @@ type Video struct {
 	// have neither.
 	Season   int   `json:"season"`
 	Episodes []int `json:"episodes,omitempty"`
+	// Absolute is an episode's number from the series' first, when its
+	// file name writes it beside its season's ("0749 Show S18E03"); 0 when
+	// it doesn't.
+	Absolute int `json:"absolute,omitempty"`
+	// Name is an episode's name as its file name writes it, after its
+	// numbers ("Show.S01E02.The.Long.Night.1080p" is "The Long Night");
+	// "" when it writes none.
+	Name string `json:"name,omitempty"`
 	// Part is which part of a film split in files this is ("cd2" is 2);
 	// 0 for a whole film.
 	Part int `json:"part,omitempty"`
@@ -311,7 +319,16 @@ func newVideo(p string, size int64) *video {
 		}
 	}
 
-	if m, ok := findEpisode(base, inSeason); ok && x.v.Extra == "" {
+	m, ok := findEpisode(base, inSeason)
+	if !ok && inSeason {
+		// "Show 783 MULTI Name": a number right after the show's name, as
+		// its season's folder names it.
+		m, ok = afterName(base, x.ctx[j+1])
+		if !ok && j >= 0 {
+			m, ok = afterName(base, x.ctx[j])
+		}
+	}
+	if ok && x.v.Extra == "" {
 		x.episode = true
 		if m.season >= 0 {
 			x.v.Season = m.season
@@ -320,6 +337,10 @@ func newVideo(p string, size int64) *video {
 		x.file = parseName(base[:m.start])
 		tail := base[m.end:]
 		x.v.Version = strings.Trim(tail[releaseStart(tail):], " -._()[]")
+		x.v.Name = episodeName(tail)
+		if m.season >= 0 {
+			x.v.Absolute = leadingAbsolute(base[:m.start])
+		}
 		// "Show (2018) - S01E01": the show's year is before the numbers,
 		// but IDs may be anywhere.
 		x.file.ids = x.file.ids.or(parseName(base).ids)

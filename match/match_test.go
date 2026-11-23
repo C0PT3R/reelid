@@ -13,6 +13,8 @@ import (
 type fake struct {
 	titles   []tmdb.Details
 	seasons  map[[2]int][]tmdb.Episode // by series ID and season number
+	orders   map[int][]tmdb.Order      // by series ID
+	groups   map[string][]tmdb.OrderSeason
 	searches int
 	details  int
 }
@@ -65,6 +67,18 @@ func (f *fake) FindIMDb(_ context.Context, imdb string) ([]tmdb.Found, error) {
 		}
 	}
 	return out, nil
+}
+
+func (f *fake) Orders(_ context.Context, id int) ([]tmdb.Order, error) {
+	return f.orders[id], nil
+}
+
+func (f *fake) OrderSeasons(_ context.Context, order string) ([]tmdb.OrderSeason, error) {
+	g, ok := f.groups[order]
+	if !ok {
+		return nil, tmdb.ErrNotFound
+	}
+	return g, nil
 }
 
 func film(id int, name string, year int, popularity float64, names ...string) tmdb.Details {

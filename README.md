@@ -20,6 +20,9 @@ For every video of a library it says:
   `Staffel 1`, `Specials`, a release's season pack `Show.S01.1080p…`,
   `Show - Saison 2`, `Show S-01 MULTi`; a season pack in a folder of
   other titles, as downloads are, is its own title, named by the pack);
+  in a pack, a number right after the show's name (`Show 783 MULTi`);
+  the **episode's name** as the file writes it after the numbers, and an
+  absolute number written before them (`0749 Show S18E03`);
 - which files are **versions** of one title (same title folder, another
   quality or edition: `Bluray-2160p`, `Director's Cut`), with the label that
   tells them apart, and **parts** (`cd1`, `part 2`);
@@ -39,7 +42,8 @@ For every video of a library it says:
 - `cmd/analyse/`: a small command that reads a listing and prints the
   result as JSON (or a summary with `-summary`).
 - `match/`: stage 2, `match.Match(ctx, source, query)`: a title's TMDB
-  ID; `tmdb/`: TMDB's API behind a cache and a rate limit.
+  ID; `match.Places`: a series' episodes in TMDB's order; `tmdb/`:
+  TMDB's API behind a cache and a rate limit.
 - `inside/`: stage 3's reading of a video's ffprobe JSON (tags, length,
   main audio language, chapters).
 - `cmd/evaluate/`: the evaluator, see below.
@@ -203,6 +207,43 @@ with how many stage 3 fixed, and stage 3's new failures.
 go run ./cmd/evaluate -stage 3 -offline -probes ~/analyser-corpus/probe.jsonl.gz
 ```
 
+## Placing the episodes in TMDB's order
+
+Once a series is matched, `match.Places` says which of TMDB's episodes
+each of its files is, in TMDB's **default order** (season and episode
+numbers, multi-episode files as several). The numbers the names write
+are most often TMDB's, and they are kept when they fit: every one is in
+TMDB's season, and the files' lengths and names agree with its
+episodes'. When they don't fit (a number beyond the season's count, a
+season TMDB doesn't have, lengths far from TMDB's), other ways are tried
+on that season's files, cheapest first:
+
+- **absolute numbers** written beside the season's (`0749 Show S18E03`),
+  or numbers counted from the series' first episode (`Show 783` in a
+  pack of season 19, `Show E05` with no season): through the season that
+  lists that number when TMDB numbers a season on from the one before
+  (`S21` listing 892 to 1088), else through the seasons' counts;
+- **places in a season** TMDB numbers on from the one before (`S21E02`
+  is its second episode);
+- **lengths**: the files, in the order of their numbers, aligned with
+  the season's episodes by their lengths, so that a file may be two or
+  three of TMDB's episodes (segments shown in one broadcast, TMDB listing
+  each eleven-minute cartoon) or two files one episode (a double episode
+  released in two parts), with episodes missing where the numbers skip;
+- **another order** (TMDB's episode groups: a DVD's, a streaming
+  service's, a production order…), fetched only now: its season of that
+  number, by its name ("Part 4") or its place.
+
+A way is taken when it places every file and leaves at most half the
+disagreements of the numbers as written (lengths within 4 minutes or
+15%; names, counting twice, only when they are TMDB's names of the
+series' episodes, so that a translated name or a release's words say
+nothing); with nothing to weigh it by, only when the numbers as written
+can't be TMDB's. Otherwise the numbers stay as written (`unplaced`
+when they don't fit). Specials are kept as written. The season details
+are fetched once ever each, like every answer; episode groups only for
+seasons that don't fit.
+
 ## The real-world evaluation
 
 The damages above are made by the evaluator itself. `-real` scores the
@@ -212,6 +253,19 @@ the downloads were put in **as hardlinks**: a download and its library
 file share an inode, and the library file's path, read by stage 1, is
 the download's truth (its TMDB ID, season and episodes). Downloads
 without a library twin are counted apart, not scored.
+
+The library's numbers are its manager's (TVDB's order), mostly TMDB's
+default but not always; for the episodes **in TMDB's order** the truth
+is found by the library file's episode name: kept where TMDB's episode
+of that number has that name, moved where TMDB has that name once
+elsewhere (two parts of one episode become that one), unconfirmed where
+TMDB has it nowhere, unknown where TMDB's season has no such number. A
+truth is contradicted where the library file's length is far from its
+episodes' (a 22-minute file named as one 11-minute segment), or where
+the download's own name is TMDB's name of another episode: the library
+is wrong there. The report gives the numbers as read and as placed
+(`match.Places`, in the series stage 3 found, when right), by kind of
+file and of truth; unknown and contradicted truths are counted apart.
 
 `-real-walk` makes the listing: one walk of `Films`, `Series` and
 `downloads` below `-real-root`, stat only (size, device, inode, path),

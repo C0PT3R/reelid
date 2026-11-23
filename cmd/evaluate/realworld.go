@@ -127,6 +127,7 @@ type realTruth struct {
 	id       int    // its title's TMDB ID; 0 when the library names none
 	season   int
 	episodes []int
+	name     string // the episode's name, as the library writes it
 	extra    analyse.ExtraKind
 }
 
@@ -175,7 +176,7 @@ func runReal(listing, probeFile string, client *tmdb.Client, workers, top int, d
 		for _, t := range res.Titles {
 			id, _ := strconv.Atoi(t.IDs.TMDB)
 			for _, v := range slices.Concat(t.Videos, t.Extras) {
-				tr := &realTruth{lib: lib, path: lib + "/" + v.Path, id: id, season: v.Season, episodes: v.Episodes, extra: v.Extra}
+				tr := &realTruth{lib: lib, path: lib + "/" + v.Path, id: id, season: v.Season, episodes: v.Episodes, name: v.Name, extra: v.Extra}
 				r.truth[inodeOf[v.Path]] = tr
 			}
 		}
@@ -540,7 +541,39 @@ func runReal(listing, probeFile string, client *tmdb.Client, workers, top int, d
 	fmt.Printf("  none found: %d → %d; stage 3 fixed %d titles, broke %d\n", a.none, b.none, fixed, broke)
 	printCounts("stage 2 wrong titles (pattern | traits of the first video's path):", a.hard, top)
 	printCounts("stage 3 wrong titles:", b.hard, top)
-	return nil
+
+	// The episodes placed in TMDB's order, in the series stage 3 found.
+	var truths []*realTruth
+	for _, tr := range r.truth {
+		truths = append(truths, tr)
+	}
+	slices.SortFunc(truths, func(a, b *realTruth) int { return strings.Compare(a.path, b.path) })
+	minutes := func(tr *realTruth) float64 {
+		if f, ok := r.probes[tr.path]; ok {
+			return f.Duration / 60
+		}
+		return 0
+	}
+	downloadNames := map[*realTruth][]string{}
+	for _, t := range res.Titles {
+		for _, v := range t.Videos {
+			if tr := truthOf(v.Path); tr != nil && v.Name != "" && !slices.Contains(downloadNames[tr], v.Name) {
+				downloadNames[tr] = append(downloadNames[tr], v.Name)
+			}
+		}
+	}
+	namesOf := func(tr *realTruth) []string { return downloadNames[tr] }
+	inOrder, err := truthInTMDBOrder(context.Background(), client, m, truths, minutes, namesOf)
+	if err != nil {
+		return err
+	}
+	var places []placeJob
+	for i, j := range jobs {
+		if best := results[i][1].Best; best != nil && best.Kind == tmdb.TV && j.t.Kind == analyse.Show {
+			places = append(places, placeJob{j.t, best.ID})
+		}
+	}
+	return scorePlaces(context.Background(), client, m, places, truthOf, inOrder, look, isPack, top, dbg)
 }
 
 // foreignName says whether a query's name is one of the title's

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -158,8 +159,8 @@ func (c *Client) Details(ctx context.Context, kind Kind, id int) (*Details, erro
 	return d, nil
 }
 
-// Season is a series' season (see Source). Its other parts (names,
-// overviews, crews) are kept in the cache with the rest but not read.
+// Season is a series' season (see Source). Its other parts (overviews,
+// crews) are kept in the cache with the rest but not read.
 func (c *Client) Season(ctx context.Context, id, number int) ([]Episode, error) {
 	body, err := c.get(ctx, "/tv/"+strconv.Itoa(id)+"/season/"+strconv.Itoa(number), url.Values{})
 	if err != nil {
@@ -167,8 +168,10 @@ func (c *Client) Season(ctx context.Context, id, number int) ([]Episode, error) 
 	}
 	var r struct {
 		Episodes []struct {
-			Number  int `json:"episode_number"`
-			Runtime int `json:"runtime"`
+			Number  int    `json:"episode_number"`
+			Runtime int    `json:"runtime"`
+			Name    string `json:"name"`
+			AirDate string `json:"air_date"`
 		} `json:"episodes"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil {
@@ -176,7 +179,71 @@ func (c *Client) Season(ctx context.Context, id, number int) ([]Episode, error) 
 	}
 	out := make([]Episode, 0, len(r.Episodes))
 	for _, e := range r.Episodes {
-		out = append(out, Episode{Number: e.Number, Runtime: e.Runtime})
+		out = append(out, Episode{Number: e.Number, Runtime: e.Runtime, Name: e.Name, AirDate: e.AirDate})
+	}
+	return out, nil
+}
+
+// Orders are a series' episode groups (see Source).
+func (c *Client) Orders(ctx context.Context, id int) ([]Order, error) {
+	body, err := c.get(ctx, "/tv/"+strconv.Itoa(id)+"/episode_groups", url.Values{})
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		Results []struct {
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			Type     int    `json:"type"`
+			Groups   int    `json:"group_count"`
+			Episodes int    `json:"episode_count"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("tmdb episode groups: %w", err)
+	}
+	out := make([]Order, 0, len(r.Results))
+	for _, g := range r.Results {
+		out = append(out, Order{ID: g.ID, Name: g.Name, Type: OrderType(g.Type), Groups: g.Groups, Episodes: g.Episodes})
+	}
+	return out, nil
+}
+
+// OrderSeasons are an episode group's groups (see Source), sorted by
+// their order, each one's episodes by theirs.
+func (c *Client) OrderSeasons(ctx context.Context, order string) ([]OrderSeason, error) {
+	body, err := c.get(ctx, "/tv/episode_group/"+url.PathEscape(order), url.Values{})
+	if err != nil {
+		return nil, err
+	}
+	type episode struct {
+		Season  int    `json:"season_number"`
+		Number  int    `json:"episode_number"`
+		Runtime int    `json:"runtime"`
+		Name    string `json:"name"`
+		AirDate string `json:"air_date"`
+		Order   int    `json:"order"`
+	}
+	type group struct {
+		Name     string    `json:"name"`
+		Order    int       `json:"order"`
+		Episodes []episode `json:"episodes"`
+	}
+	var r struct {
+		Groups []group `json:"groups"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("tmdb episode group: %w", err)
+	}
+	slices.SortStableFunc(r.Groups, func(a, b group) int { return a.Order - b.Order })
+	out := make([]OrderSeason, 0, len(r.Groups))
+	for _, g := range r.Groups {
+		slices.SortStableFunc(g.Episodes, func(a, b episode) int { return a.Order - b.Order })
+		s := OrderSeason{Name: g.Name, Order: g.Order}
+		for _, e := range g.Episodes {
+			s.Episodes = append(s.Episodes, Placed{Season: e.Season, Number: e.Number, Runtime: e.Runtime, Name: e.Name, AirDate: e.AirDate})
+		}
+		out = append(out, s)
 	}
 	return out, nil
 }

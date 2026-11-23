@@ -144,10 +144,12 @@ func sharedFolder(entries []analyse.Entry) string {
 	return strings.Join(shared, "/")
 }
 
-// matched is a title's TMDB match, by the title's folder (or first file).
+// matched is a title's TMDB match, by the title's folder (or first file);
+// for a series, where its episodes are in TMDB's order, by path.
 type matched struct {
 	Title string `json:"title"`
 	match.Result
+	Places map[string]match.Place `json:"places,omitempty"`
 }
 
 // matchTitles matches each title found to TMDB, through a cache; with a
@@ -190,7 +192,17 @@ func matchTitles(res analyse.Result, tokenFile, cache string, rate float64, prob
 		if where == "" && len(t.Videos) > 0 {
 			where = t.Videos[0].Path
 		}
-		out = append(out, matched{Title: where, Result: r})
+		m := matched{Title: where, Result: r}
+		if r.Best != nil && r.Best.Kind == tmdb.TV && t.Kind == analyse.Show {
+			lookup := look
+			if probes == nil {
+				lookup = nil
+			}
+			if m.Places, err = match.Places(context.Background(), client, t, r.Best.ID, lookup); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, m)
 	}
 	fmt.Fprintf(os.Stderr, "TMDB: %d requests made, %d answers from the cache\n", client.Requests(), client.Hits())
 	return out, nil

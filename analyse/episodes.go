@@ -67,6 +67,65 @@ func findEpisode(s string, inSeason bool) (mark, bool) {
 	return mark{}, false
 }
 
+// numberToken is a number between separators in a name.
+var numberToken = regexp.MustCompile(`[ ._-]+(\d{1,4})(?:[ ._-]|$)`)
+
+// afterName finds an episode number written right after the show's name
+// in a season folder ("Show 783 MULTI Name" in "Show S19 MULTi"): the
+// first number of the file name that the folder's name, or its name
+// before its season marker, leads to. A year is not one.
+func afterName(base, folder string) (mark, bool) {
+	show := Key(parseName(folder).name)
+	if show == "" {
+		return mark{}, false
+	}
+	for _, m := range numberToken.FindAllStringSubmatchIndex(base, -1) {
+		if Key(cleanName(base[:m[0]])) != show {
+			continue
+		}
+		n, _ := strconv.Atoi(base[m[2]:m[3]])
+		if n == 0 || m[3]-m[2] == 4 && n >= 1900 && n < 2100 {
+			return mark{}, false
+		}
+		return mark{season: -1, episodes: []int{n}, start: m[2], end: m[3]}, true
+	}
+	return mark{}, false
+}
+
+// absoluteLead is a number before a name: "0749 Show " before "S18E03".
+var absoluteLead = regexp.MustCompile(`^(\d{2,4})[ ._-]+\pL`)
+
+// leadingAbsolute is the absolute number before a show's name and its
+// season's numbers ("0749 Show S18E03"); 0 for none, or a year.
+func leadingAbsolute(before string) int {
+	m := absoluteLead.FindStringSubmatch(before)
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	if len(m[1]) == 4 && n >= 1900 && n < 2100 {
+		return 0
+	}
+	return n
+}
+
+// episodeName is an episode's name in what follows its numbers in a file
+// name (" - The Long Night 1080p", ".The.Long.Night.1080p.WEB"), up to the
+// release's description; "" for none.
+func episodeName(tail string) string {
+	tail = strings.TrimLeft(tail, " -._")
+	// releaseStart skips its first word (a name's); here the first may be
+	// the release's already ("S01E02.1080p.WEB").
+	end := releaseStart("x " + tail)
+	end = max(end-2, 0)
+	name := cleanName(tail[:end])
+	name = strings.Trim(name, " -._()[]{}'\"")
+	if !hasName(name) {
+		return ""
+	}
+	return name
+}
+
 // isResolutionAt says whether a "1x02"-like match at i is part of a
 // longer number, as in a resolution ("1920x1080").
 func isResolutionAt(s string, i int) bool {

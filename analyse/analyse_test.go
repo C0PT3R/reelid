@@ -378,3 +378,32 @@ func TestParseNameExported(t *testing.T) {
 		}
 	}
 }
+
+func TestEpisodeNamesAndNumbers(t *testing.T) {
+	// The episode's name after its numbers, a number right after the
+	// show's name in a season pack, and an absolute number before it.
+	res := Analyse([]Entry{
+		{Path: "Lantern.Bay.S02.1080p.WEB-GRP/Lantern.Bay.S02E03.The.Long.Night.1080p.WEB-GRP.mkv"},
+		{Path: "Lantern.Bay.S02.1080p.WEB-GRP/Lantern.Bay.S02E04.1080p.WEB-GRP.mkv"},
+		{Path: "Iron Lantern S19 MULTi 1080p - GRP/Iron Lantern 783 MULTi 'Name' 1080p 2017.mkv"},
+		{Path: "Iron Lantern S19 MULTi 1080p - GRP/Iron Lantern 2017 MULTi 1080p.mkv"},
+		{Path: "Iron Lantern S18 MULTi 1080p - GRP/0749 Iron Lantern S18E03 Multi 'Name' 1080p.mkv"},
+	})
+	got := map[string]string{}
+	for _, title := range res.Titles {
+		for _, v := range title.Videos {
+			got[v.Path] = fmt.Sprintf("S%dE%v %q abs %d", v.Season, v.Episodes, v.Name, v.Absolute)
+		}
+	}
+	for p, want := range map[string]string{
+		"Lantern.Bay.S02.1080p.WEB-GRP/Lantern.Bay.S02E03.The.Long.Night.1080p.WEB-GRP.mkv":  `S2E[3] "The Long Night" abs 0`,
+		"Lantern.Bay.S02.1080p.WEB-GRP/Lantern.Bay.S02E04.1080p.WEB-GRP.mkv":                 `S2E[4] "" abs 0`,
+		"Iron Lantern S19 MULTi 1080p - GRP/Iron Lantern 783 MULTi 'Name' 1080p 2017.mkv":    `S19E[783] "" abs 0`,
+		"Iron Lantern S19 MULTi 1080p - GRP/Iron Lantern 2017 MULTi 1080p.mkv":               `S19E[] "" abs 0`,
+		"Iron Lantern S18 MULTi 1080p - GRP/0749 Iron Lantern S18E03 Multi 'Name' 1080p.mkv": `S18E[3] "" abs 749`,
+	} {
+		if got[p] != want {
+			t.Errorf("%s: got %s, want %s", p, got[p], want)
+		}
+	}
+}
