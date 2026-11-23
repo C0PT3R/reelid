@@ -38,6 +38,14 @@ func fakeTMDB(t *testing.T, tooMany int) (*httptest.Server, *atomic.Int64) {
 				"seasons":[{"season_number":0,"episode_count":2},{"season_number":1,"episode_count":10}],
 				"alternative_titles":{"results":[{"title":"The Northern Line"}]},
 				"translations":{"translations":[{"data":{"name":"Ligne du Nord"}},{"data":{"name":""}}]}}`))
+		case "/tv/10/season/1":
+			w.Write([]byte(`{"season_number":1,"episodes":[{"episode_number":1,"runtime":52},{"episode_number":2,"runtime":null}]}`))
+		case "/find/tt0000042":
+			if r.URL.Query().Get("external_source") != "imdb_id" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Write([]byte(`{"movie_results":[{"id":1,"title":"Quiet Harbor","release_date":"1998-04-02","original_language":"en"}],"tv_results":[]}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -109,6 +117,29 @@ func TestDetails(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Errorf("%d calls, want 2", calls.Load())
+	}
+}
+
+func TestSeasonAndFind(t *testing.T) {
+	srv, _ := fakeTMDB(t, 0)
+	c := newTestClient(t, srv.URL, "secret")
+	ctx := context.Background()
+	eps, err := c.Season(ctx, 10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eps) != 2 || eps[0].Number != 1 || eps[0].Runtime != 52 || eps[1].Runtime != 0 {
+		t.Errorf("season: got %+v", eps)
+	}
+	if _, err := c.Season(ctx, 10, 7); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing season: got %v, want not found", err)
+	}
+	found, err := c.FindIMDb(ctx, "tt0000042")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 || found[0].ID != 1 || found[0].Kind != Movie || found[0].Language != "en" {
+		t.Errorf("find: got %+v", found)
 	}
 }
 

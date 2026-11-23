@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/overfin/analyser/analyse"
+	"github.com/overfin/analyser/inside"
 	"github.com/overfin/analyser/match"
 	"github.com/overfin/analyser/tmdb"
 )
@@ -63,6 +64,8 @@ type matchRun struct {
 	renamed           int // titles the translated damage renamed
 	hard              map[string]*hardCase
 	debug             []string
+	// wrong are the titles matched wrong, with their pattern.
+	wrong map[*title]string
 }
 
 // hardCase counts a pattern of wrong matches.
@@ -193,7 +196,8 @@ func latin(n string) bool {
 
 // match matches a query, once per query over all runs.
 func (m *matcher) match(ctx context.Context, q match.Query) (match.Result, error) {
-	key := fmt.Sprintf("%s|%s|%d|%v", q.Kind, analyse.Key(q.Name), q.Year, q.Episodes)
+	key := fmt.Sprintf("%s|%s|%d|%v|%d|%s|%s|%v|%v|%v", q.Kind, analyse.Key(q.Name), q.Year, q.Episodes,
+		q.TMDB, q.TMDBKind, q.IMDB, q.Tagged, q.Runtime, q.Lengths)
 	m.mu.Lock()
 	res, ok := m.matches[key]
 	m.mu.Unlock()
@@ -211,9 +215,14 @@ func (m *matcher) match(ctx context.Context, q match.Query) (match.Result, error
 }
 
 // runMatch damages the key as s says, analyses it, matches each title
-// found, and scores the matches against the key's IDs.
-func (m *matcher) runMatch(ctx context.Context, c *corpus, s style) (*matchRun, error) {
-	r := &matchRun{name: s.name, hard: map[string]*hardCase{}}
+// found, and scores the matches against the key's IDs. With look (what
+// a key file says of itself, see stage3), each title is also matched
+// with what its files say, and scored apart: stage 3 beside stage 2.
+func (m *matcher) runMatch(ctx context.Context, c *corpus, s style, look func(*file) (inside.File, bool)) (r, r3 *matchRun, err error) {
+	r = newMatchRun(s.name)
+	if look != nil {
+		r3 = newMatchRun(s.name)
+	}
 	files := append(slices.Clip(c.files), added(c, s)...)
 	libs := []string{"Films", "Series"}
 	if s.mixed {
@@ -266,27 +275,45 @@ func (m *matcher) runMatch(ctx context.Context, c *corpus, s style) (*matchRun, 
 		}
 
 		// The matches, on the workers.
-		results := make([]match.Result, len(titles))
-		queries := make([]match.Query, len(titles))
+		results, results3 := make([]match.Result, len(titles)), make([]match.Result, len(titles))
+		queries, queries3 := make([]match.Query, len(titles)), make([]match.Query, len(titles))
 		err := m.each(len(titles), func(i int) error {
 			at := home[titles[i]]
 			if at == nil {
 				results[i] = match.Result{Confidence: match.None}
+				results3[i] = results[i]
 				return nil
 			}
 			queries[i] = match.QueryOf(at)
 			var err error
-			results[i], err = m.match(ctx, queries[i])
+			if results[i], err = m.match(ctx, queries[i]); err != nil || look == nil {
+				return err
+			}
+			queries3[i] = queries[i]
+			match.AddInside(&queries3[i], at, func(p string) (inside.File, bool) {
+				if f := fileOf[p]; f != nil {
+					return look(f)
+				}
+				return inside.File{}, false
+			})
+			results3[i], err = m.match(ctx, queries3[i])
 			return err
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for i, t := range titles {
 			r.score(t, queries[i], results[i], m.truth[t], s)
+			if r3 != nil {
+				r3.score(t, queries3[i], results3[i], m.truth[t], s)
+			}
 		}
 	}
-	return r, nil
+	return r, r3, nil
+}
+
+func newMatchRun(name string) *matchRun {
+	return &matchRun{name: name, hard: map[string]*hardCase{}, wrong: map[*title]string{}}
 }
 
 // score scores one title's match.
@@ -328,6 +355,7 @@ func (r *matchRun) score(t *title, q match.Query, res match.Result, truth *tmdb.
 		return
 	}
 	pattern := hardPattern(t, q, res, truth)
+	r.wrong[t] = pattern
 	h := r.hard[pattern]
 	if h == nil {
 		h = &hardCase{traits: map[string]int{}}
@@ -347,8 +375,12 @@ func (r *matchRun) score(t *title, q match.Query, res match.Result, truth *tmdb.
 	if res.Best != nil {
 		got = fmt.Sprintf("%s/%d %q (%d) %d %v", res.Best.Kind, res.Best.ID, res.Best.Name, res.Best.Year, res.Best.Score, res.Best.Why)
 	}
-	r.debug = append(r.debug, fmt.Sprintf("%s\t%s\t%s %q (%d) %s/%s\tquery %q %d %s\tgot %s",
-		pattern, res.Confidence, t.lib, t.name, t.year, kindOf(t), t.id, q.Name, q.Year, q.Kind, got))
+	truthAs := "truth not weighed"
+	if i := slices.IndexFunc(res.All, func(c match.Candidate) bool { return strconv.Itoa(c.ID) == t.id && c.Kind == kindOf(t) }); i >= 0 {
+		truthAs = fmt.Sprintf("truth #%d %d %v", i+1, res.All[i].Score, res.All[i].Why)
+	}
+	r.debug = append(r.debug, fmt.Sprintf("%s\t%s\t%s %q (%d) %s/%s\tquery %q %d %s\tgot %s\t%s",
+		pattern, res.Confidence, t.lib, t.name, t.year, kindOf(t), t.id, q.Name, q.Year, q.Kind, got, truthAs))
 }
 
 // hardPattern says, without a name, why a title was matched wrong: from
@@ -474,7 +506,7 @@ func stage2(ctx context.Context, c *corpus, src tmdb.Source, workers int, only s
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "stage 2: %s\n", s.name)
-		r, err := m.runMatch(ctx, c, s)
+		r, _, err := m.runMatch(ctx, c, s, nil)
 		if err != nil {
 			return err
 		}

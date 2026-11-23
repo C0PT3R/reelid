@@ -3,6 +3,7 @@
 Overfin's own file analyser: it says what the files of a media library
 are. Stage 1 is **identification from paths alone**: no file is opened
 and no database asked. Stage 2 **matches each title to its TMDB ID**.
+Stage 3 weighs **what is inside the files** too, when it is known.
 
 For every video of a library it says:
 
@@ -36,6 +37,8 @@ For every video of a library it says:
   result as JSON (or a summary with `-summary`).
 - `match/`: stage 2, `match.Match(ctx, source, query)`: a title's TMDB
   ID; `tmdb/`: TMDB's API behind a cache and a rate limit.
+- `inside/`: stage 3's reading of a video's ffprobe JSON (tags, length,
+  main audio language, chapters).
 - `cmd/evaluate/`: the evaluator, see below.
 
 ```sh
@@ -150,6 +153,51 @@ reboot)", "sequel number", "name not TMDB's"…), never a title.
 go run ./cmd/evaluate -stage 2 -tmdb-token ~/.config/tmdb-token \
     -tmdb-cache ~/analyser-corpus/tmdb-cache             # the default cache
 go run ./cmd/evaluate -stage 2 -offline -only translated # from the cache
+```
+
+## Stage 3: what the files say
+
+`match.AddInside` adds to a title's query what its files say of
+themselves (`inside.Parse` reads ffprobe's
+`-show_format -show_streams -show_chapters` JSON). Every signal is
+optional; a query without any is matched as in stage 2:
+
+- **embedded IDs**: TMDB (`tmdb=movie/4821`) and IMDb (`imdb=tt7654321`)
+  tags, when most files give one and no more than a third another (an
+  IMDb ID is looked up with TMDB's `find`); the title named gets a large
+  part, less than a name and a year together, so a tag copied from
+  another file loses to what the paths say; when the TMDB and IMDb tags
+  name two titles, neither counts;
+- **lengths**: a film's against TMDB's runtime (near: within 8 minutes or
+  10%; far: beyond 20 minutes or 25%, against it); a series' episodes
+  against their runtimes in TMDB's season details, fetched for the first
+  two seasons on disk of the best candidates only, once ever each; with
+  lengths known, the best six candidates are weighed closely, not three;
+- **the title tag** (and the show tag), read with stage 1's name parser:
+  often the release's own name, with its year. It counts a little less
+  than the paths' name, and its year only for a candidate it names. For a
+  series, only a name most episodes share (other tags are episodes'
+  names);
+- **the main audio track's language** against TMDB's original language
+  was tried as a weak sign, and left out: measured, it matched films
+  worse (dubbed copies of a same-named title) and series hardly better;
+- **chapters**: measured, and left out: TMDB has nothing to compare them
+  with, and as a sign of film or episode they say less than the length.
+
+### Its evaluation
+
+`-stage 3` reads the probes (`-probes`, JSON lines of `path` and `probe`,
+gzipped or not, read a line at a time) and runs every stage 2 run with
+the files intact, then the main ones with the inside damaged:
+`tags-stripped` (title, show and ID tags gone), `wrong-title` (every
+file of a title carries the title tags of another title's files),
+`no-durations`. Each title is matched by its paths alone and with its
+files: the report puts stage 2 and stage 3 side by side per run (films,
+series, the confidence's calibration), then stage 2's failure patterns
+with how many stage 3 fixed, and stage 3's new failures.
+
+```sh
+go run ./cmd/evaluate -stage 3 -offline -probes ~/analyser-corpus/probe.jsonl.gz
 ```
 
 ## How it's made

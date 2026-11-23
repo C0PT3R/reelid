@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/overfin/analyser/analyse"
+	"github.com/overfin/analyser/inside"
 	"github.com/overfin/analyser/match"
 	"github.com/overfin/analyser/tmdb"
 )
@@ -32,6 +33,7 @@ func main() {
 	tokenFile := flag.String("tmdb-token", os.Getenv("TMDB_TOKEN_FILE"), "match the titles to TMDB, with the API read access token in this file (default $TMDB_TOKEN_FILE; none: no matching)")
 	cache := flag.String("tmdb-cache", "", "the folder of TMDB's cached answers (needed for matching)")
 	rate := flag.Float64("rate", 10, "at most this many requests to TMDB a second")
+	probes := flag.String("probes", "", "with matching: what the videos say of themselves, a file of JSON lines {path, probe: ffprobe's JSON} (gzipped if .gz), paths as the listing's")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: analyse [-root folder] [-summary] [listing.tsv]")
 		flag.PrintDefaults()
@@ -57,7 +59,7 @@ func main() {
 	res := analyse.Analyse(entries)
 	var matches []matched
 	if *tokenFile != "" {
-		if matches, err = matchTitles(res, *tokenFile, *cache, *rate); err != nil {
+		if matches, err = matchTitles(res, *tokenFile, *cache, *rate, *probes, *root); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -148,10 +150,26 @@ type matched struct {
 	match.Result
 }
 
-// matchTitles matches each title found to TMDB, through a cache.
-func matchTitles(res analyse.Result, tokenFile, cache string, rate float64) ([]matched, error) {
+// matchTitles matches each title found to TMDB, through a cache; with a
+// probes' file, with what the videos say of themselves too (stage 3).
+func matchTitles(res analyse.Result, tokenFile, cache string, rate float64, probesFile, root string) ([]matched, error) {
 	if cache == "" {
 		return nil, fmt.Errorf("-tmdb-cache: say where TMDB's answers are kept")
+	}
+	var probes map[string]inside.File
+	if probesFile != "" {
+		var err error
+		if probes, err = inside.ReadProbes(probesFile); err != nil {
+			return nil, err
+		}
+	}
+	// A probe's path, as the analysis writes it: relative to the root.
+	look := func(p string) (inside.File, bool) {
+		f, ok := probes[p]
+		if !ok && root != "" {
+			f, ok = probes[strings.TrimSuffix(root, "/")+"/"+p]
+		}
+		return f, ok
 	}
 	token, err := tmdb.ReadToken(tokenFile)
 	if err != nil {
@@ -160,7 +178,11 @@ func matchTitles(res analyse.Result, tokenFile, cache string, rate float64) ([]m
 	client := tmdb.NewClient(token, cache, rate)
 	out := make([]matched, 0, len(res.Titles))
 	for _, t := range res.Titles {
-		r, err := match.Match(context.Background(), client, match.QueryOf(t))
+		q := match.QueryOf(t)
+		if probes != nil {
+			match.AddInside(&q, t, look)
+		}
+		r, err := match.Match(context.Background(), client, q)
 		if err != nil {
 			return nil, err
 		}

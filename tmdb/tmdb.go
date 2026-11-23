@@ -40,6 +40,9 @@ type Found struct {
 	Year         int // of its first release or first airing; 0 when unknown
 	Popularity   float64
 	Votes        int
+	// Language is the title's original language, as TMDB writes it (ISO
+	// 639-1, "en"); "" when unknown.
+	Language string
 }
 
 // Season is one of a series' seasons on TMDB.
@@ -56,6 +59,18 @@ type Details struct {
 	Translations []string
 	AltNames     []string
 	Seasons      []Season // a series' only
+	// Runtime is a film's length in minutes, or a series' usual episode
+	// length; 0 when TMDB doesn't say.
+	Runtime int
+	// IMDB is a film's IMDb ID ("tt7654321"); TMDB gives none for series
+	// in these details.
+	IMDB string
+}
+
+// Episode is one episode of a season on TMDB.
+type Episode struct {
+	Number  int
+	Runtime int // in minutes; 0 when TMDB doesn't say
 }
 
 // Names are all the names of the title: its own, its original, its
@@ -75,6 +90,12 @@ type Source interface {
 	// Details are one title's details; ErrNotFound when TMDB has no such
 	// title.
 	Details(ctx context.Context, kind Kind, id int) (*Details, error)
+	// Season is a series' season: its episodes and their lengths;
+	// ErrNotFound when TMDB has no such season.
+	Season(ctx context.Context, id, number int) ([]Episode, error)
+	// FindIMDb gives the titles TMDB knows by an IMDb ID ("tt7654321"),
+	// films and series; none when it knows none.
+	FindIMDb(ctx context.Context, imdb string) ([]Found, error)
 }
 
 // yearOf reads the year of a TMDB date ("2001-05-18"); 0 for none.

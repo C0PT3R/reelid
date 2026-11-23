@@ -357,3 +357,17 @@ func sameTitle(a, b named) bool {
 	}
 	return kb == ka || strings.HasPrefix(kb, ka+" ")
 }
+
+// ParseName reads a name that isn't a path: a title tag inside a file,
+// often the release's own name ("Name.2002.1080p.BluRay-GRP",
+// "Show.S01E02.Episode.720p", "Name (2002)"). It gives the title's name
+// and year as stage 1 reads them from a file name, without what follows
+// an episode's numbers ("" and 0 when it finds none).
+func ParseName(s string) (name string, year int, ids IDs) {
+	s = strings.TrimSpace(s)
+	if m, ok := findEpisode(s, false); ok {
+		s = s[:m.start]
+	}
+	n := parseName(s)
+	return n.name, n.year, n.ids
+}

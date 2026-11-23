@@ -115,7 +115,10 @@ func (c *Client) Details(ctx context.Context, kind Kind, id int) (*Details, erro
 	}
 	var r struct {
 		result
-		Seasons []struct {
+		Runtime        int    `json:"runtime"`          // a film's
+		EpisodeRunTime []int  `json:"episode_run_time"` // a series'
+		IMDB           string `json:"imdb_id"`          // a film's
+		Seasons        []struct {
 			Number   int `json:"season_number"`
 			Episodes int `json:"episode_count"`
 		} `json:"seasons"`
@@ -135,7 +138,10 @@ func (c *Client) Details(ctx context.Context, kind Kind, id int) (*Details, erro
 	if err := json.Unmarshal(body, &r); err != nil {
 		return nil, fmt.Errorf("tmdb details: %w", err)
 	}
-	d := &Details{Found: r.found(kind)}
+	d := &Details{Found: r.found(kind), Runtime: r.Runtime, IMDB: r.IMDB}
+	if d.Runtime == 0 && len(r.EpisodeRunTime) > 0 {
+		d.Runtime = r.EpisodeRunTime[0]
+	}
 	for _, s := range r.Seasons {
 		d.Seasons = append(d.Seasons, Season{Number: s.Number, Episodes: s.Episodes})
 	}
@@ -152,6 +158,52 @@ func (c *Client) Details(ctx context.Context, kind Kind, id int) (*Details, erro
 	return d, nil
 }
 
+// Season is a series' season (see Source). Its other parts (names,
+// overviews, crews) are kept in the cache with the rest but not read.
+func (c *Client) Season(ctx context.Context, id, number int) ([]Episode, error) {
+	body, err := c.get(ctx, "/tv/"+strconv.Itoa(id)+"/season/"+strconv.Itoa(number), url.Values{})
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		Episodes []struct {
+			Number  int `json:"episode_number"`
+			Runtime int `json:"runtime"`
+		} `json:"episodes"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("tmdb season: %w", err)
+	}
+	out := make([]Episode, 0, len(r.Episodes))
+	for _, e := range r.Episodes {
+		out = append(out, Episode{Number: e.Number, Runtime: e.Runtime})
+	}
+	return out, nil
+}
+
+// FindIMDb looks a title up by its IMDb ID (see Source).
+func (c *Client) FindIMDb(ctx context.Context, imdb string) ([]Found, error) {
+	body, err := c.get(ctx, "/find/"+url.PathEscape(imdb), url.Values{"external_source": {"imdb_id"}})
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		Movies []result `json:"movie_results"`
+		Series []result `json:"tv_results"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("tmdb find: %w", err)
+	}
+	var out []Found
+	for _, m := range r.Movies {
+		out = append(out, m.found(Movie))
+	}
+	for _, t := range r.Series {
+		out = append(out, t.found(TV))
+	}
+	return out, nil
+}
+
 // result is a title as TMDB's answers write it, films and series alike.
 type result struct {
 	ID            int     `json:"id"`
@@ -163,10 +215,11 @@ type result struct {
 	FirstAirDate  string  `json:"first_air_date"`
 	Popularity    float64 `json:"popularity"`
 	VoteCount     int     `json:"vote_count"`
+	Language      string  `json:"original_language"`
 }
 
 func (r result) found(kind Kind) Found {
-	f := Found{ID: r.ID, Kind: kind, Popularity: r.Popularity, Votes: r.VoteCount}
+	f := Found{ID: r.ID, Kind: kind, Popularity: r.Popularity, Votes: r.VoteCount, Language: r.Language}
 	if kind == TV {
 		f.Name, f.OriginalName, f.Year = r.Name, r.OriginalName, yearOf(r.FirstAirDate)
 	} else {

@@ -313,3 +313,24 @@ func TestMixed(t *testing.T) {
 		t.Errorf("library = %s, want empty", res.Library)
 	}
 }
+
+func TestParseNameExported(t *testing.T) {
+	tests := []struct {
+		in   string
+		name string
+		year int
+	}{
+		{"Quiet.Harbor.1998.1080p.BluRay.x264-GRP", "Quiet Harbor", 1998},
+		{"Quiet Harbor (1998)", "Quiet Harbor", 1998},
+		{"Northern.Line.S01E02.The.Signal.720p.WEB", "Northern Line", 0},
+		{"Northern Line - 1x02 - The Signal", "Northern Line", 0},
+		{"The Copper Lantern", "The Copper Lantern", 0},
+		{"  ", "", 0},
+	}
+	for _, tt := range tests {
+		name, year, _ := ParseName(tt.in)
+		if name != tt.name || year != tt.year {
+			t.Errorf("ParseName(%q) = %q, %d; want %q, %d", tt.in, name, year, tt.name, tt.year)
+		}
+	}
+}

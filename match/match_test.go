@@ -5,12 +5,14 @@ import (
 	"testing"
 
 	"github.com/overfin/analyser/analyse"
+	"github.com/overfin/analyser/inside"
 	"github.com/overfin/analyser/tmdb"
 )
 
 // fake is a made-up TMDB: its titles, searched by their names' keys.
 type fake struct {
 	titles   []tmdb.Details
+	seasons  map[[2]int][]tmdb.Episode // by series ID and season number
 	searches int
 	details  int
 }
@@ -45,6 +47,24 @@ func (f *fake) Details(_ context.Context, kind tmdb.Kind, id int) (*tmdb.Details
 		}
 	}
 	return nil, tmdb.ErrNotFound
+}
+
+func (f *fake) Season(_ context.Context, id, number int) ([]tmdb.Episode, error) {
+	eps, ok := f.seasons[[2]int{id, number}]
+	if !ok {
+		return nil, tmdb.ErrNotFound
+	}
+	return eps, nil
+}
+
+func (f *fake) FindIMDb(_ context.Context, imdb string) ([]tmdb.Found, error) {
+	var out []tmdb.Found
+	for _, t := range f.titles {
+		if t.IMDB == imdb {
+			out = append(out, t.Found)
+		}
+	}
+	return out, nil
 }
 
 func film(id int, name string, year int, popularity float64, names ...string) tmdb.Details {
@@ -195,5 +215,98 @@ func TestQueryOf(t *testing.T) {
 	q := QueryOf(title)
 	if q.Episodes[1] != 10 || q.Episodes[2] != 3 || len(q.Episodes) != 2 {
 		t.Errorf("episodes: got %v", q.Episodes)
+	}
+}
+
+// insideLibrary is a made-up TMDB for the files' own signals: two films
+// of one name (lengths, languages and an IMDb ID apart), and two series
+// of one name whose episodes' lengths differ.
+func insideLibrary() *fake {
+	a := film(21, "Glass Orchard", 1987, 10)
+	a.Runtime, a.Language, a.IMDB = 95, "fr", "tt0000021"
+	b := film(25, "Glass Orchard", 2016, 30)
+	b.Runtime, b.Language = 128, "en"
+	c := film(23, "Unlisted Picture", 2003, 1) // a name no search finds
+	c.Name, c.OriginalName = "Something Else Entirely", "Something Else Entirely"
+	s1 := series(31, "Harbor Lights", 1999, 5, 6)
+	s2 := series(32, "Harbor Lights", 2022, 20, 6)
+	return &fake{
+		titles: []tmdb.Details{a, b, c, s1, s2},
+		seasons: map[[2]int][]tmdb.Episode{
+			{31, 1}: episodes(6, 50),
+			{32, 1}: episodes(6, 24),
+		},
+	}
+}
+
+// episodes are a season's n episodes, each of runtime minutes.
+func episodes(n, runtime int) []tmdb.Episode {
+	var out []tmdb.Episode
+	for i := 1; i <= n; i++ {
+		out = append(out, tmdb.Episode{Number: i, Runtime: runtime})
+	}
+	return out
+}
+
+func TestMatchInside(t *testing.T) {
+	short := map[Episode]float64{{1, 1}: 23 * 60, {1, 2}: 24 * 60, {1, 3}: 25 * 60}
+	tests := []struct {
+		name string
+		q    Query
+		id   int
+	}{
+		{"same name, no year: the length", Query{Kind: analyse.Film, Name: "Glass Orchard", Runtime: 96 * 60}, 21},
+		{"same name, no year: the tag's year", Query{Kind: analyse.Film, Name: "Glass Orchard", Tagged: []Named{{"Glass Orchard", 1987}}}, 21},
+		{"a name no search finds, by its tagged ID", Query{Kind: analyse.Film, Name: "Unlisted Picture", TMDB: 23, TMDBKind: tmdb.Movie}, 23},
+		{"by its IMDb ID", Query{Kind: analyse.Film, Name: "Glass Orchard", IMDB: "tt0000021"}, 21},
+		{"a wrong tag loses to the paths' name and year", Query{Kind: analyse.Film, Name: "Glass Orchard", Year: 2016, Tagged: []Named{{"Harbor Lights", 1999}}}, 25},
+		{"series of one name, by episodes' lengths", Query{Kind: analyse.Show, Name: "Harbor Lights", Episodes: map[int]int{1: 3}, Lengths: short}, 32},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := Match(context.Background(), insideLibrary(), tt.q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Best == nil || res.Best.ID != tt.id {
+				t.Errorf("got %+v, want %d", res.Best, tt.id)
+			}
+		})
+	}
+}
+
+func TestAddInside(t *testing.T) {
+	title := &analyse.Title{Kind: analyse.Show, Name: "Harbor Lights", Videos: []*analyse.Video{
+		{Path: "a", Season: 1, Episodes: []int{1}}, {Path: "b", Season: 1, Episodes: []int{2}},
+		{Path: "c", Season: 1, Episodes: []int{3, 4}}, {Path: "d", Season: 1, Episodes: []int{5}},
+	}}
+	files := map[string]inside.File{
+		"a": {Duration: 1400, Title: "Harbor.Lights.S01E01.720p.WEB-GRP", Language: "en", TMDB: 32, TMDBKind: "tv"},
+		"b": {Duration: 1450, Title: "The Second One", Language: "en"},
+		"c": {Duration: 2900, Title: "Harbor.Lights.S01E03E04.720p.WEB-GRP", Language: "en"},
+		"d": {Duration: 1420, Title: "Harbor.Lights.S01E05.720p.WEB-GRP", Language: "fr"},
+	}
+	q := QueryOf(title)
+	AddInside(&q, title, func(p string) (inside.File, bool) { f, ok := files[p]; return f, ok })
+	if q.TMDB != 32 || q.TMDBKind != tmdb.TV {
+		t.Errorf("ID: got %d %q", q.TMDB, q.TMDBKind)
+	}
+	if len(q.Tagged) != 1 || q.Tagged[0] != (Named{"Harbor Lights", 0}) {
+		t.Errorf("tagged: got %+v, want the release name most episodes share", q.Tagged)
+	}
+	if len(q.Lengths) != 3 || q.Lengths[Episode{1, 2}] != 1450 {
+		t.Errorf("lengths: got %v, want the three one-episode files", q.Lengths)
+	}
+}
+
+func TestRuntimeFit(t *testing.T) {
+	for _, tt := range []struct {
+		minutes float64
+		runtime int
+		want    int
+	}{{95, 95, runtimeScore}, {102, 95, runtimeScore}, {110, 95, 0}, {130, 95, runtimeOffScore}, {95, 0, 0}, {0, 95, 0}} {
+		if got, _ := runtimeFit(tt.minutes*60, tt.runtime); got != tt.want {
+			t.Errorf("runtimeFit(%v min, %d) = %d, want %d", tt.minutes, tt.runtime, got, tt.want)
+		}
 	}
 }

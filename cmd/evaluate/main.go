@@ -75,7 +75,8 @@ func main() {
 	top := flag.Int("patterns", 30, "how many of the commonest failure patterns to print")
 	samples := flag.Int("samples", 0, "print this many anonymous path patterns per damage, to see what it does")
 	debug := flag.String("debug", "", "write failures with their REAL paths to this file (keep it private, outside the repository)")
-	stage := flag.Int("stage", 1, "1: the paths' analysis; 2: matching to TMDB (asks TMDB, see -tmdb-token)")
+	stage := flag.Int("stage", 1, "1: the paths' analysis; 2: matching to TMDB (asks TMDB, see -tmdb-token); 3: matching with what the files say too (see -probes)")
+	probes := flag.String("probes", os.Getenv("HOME")+"/analyser-corpus/probe.jsonl.gz", "stage 3: the key's videos' ffprobe answers, one JSON line each (path, probe), gzipped or not")
 	cache := flag.String("tmdb-cache", os.Getenv("HOME")+"/analyser-corpus/tmdb-cache", "stage 2: the folder of TMDB's cached answers")
 	tokenFile := flag.String("tmdb-token", os.Getenv("TMDB_TOKEN_FILE"), "stage 2: the file holding TMDB's API read access token (default $TMDB_TOKEN_FILE)")
 	offline := flag.Bool("offline", false, "stage 2: answer from the cache only, never ask TMDB")
@@ -114,8 +115,12 @@ func main() {
 	}
 	fmt.Printf("key: %d files read (%d films, %d series), %d left out (not in the clean layout)\n\n", len(c.files), films, series, c.skipped)
 
-	if *stage == 2 {
-		if err := runStage2(c, *cache, *tokenFile, *offline, *rate, *workers, *only, *top, dbg); err != nil {
+	if *stage == 2 || *stage == 3 {
+		probeFile := ""
+		if *stage == 3 {
+			probeFile = *probes
+		}
+		if err := runStage2(c, *cache, *tokenFile, *offline, *rate, *workers, *only, *top, probeFile, dbg); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -148,9 +153,9 @@ func main() {
 	report(runs, *top)
 }
 
-// runStage2 makes the TMDB client and runs stage 2, then says how many
-// requests went to TMDB.
-func runStage2(c *corpus, cache, tokenFile string, offline bool, rate float64, workers int, only string, top int, dbg *bufio.Writer) error {
+// runStage2 makes the TMDB client and runs stage 2 (or stage 3 with a
+// probes' file), then says how many requests went to TMDB.
+func runStage2(c *corpus, cache, tokenFile string, offline bool, rate float64, workers int, only string, top int, probes string, dbg *bufio.Writer) error {
 	token := ""
 	if !offline {
 		if tokenFile == "" {
@@ -170,7 +175,12 @@ func runStage2(c *corpus, cache, tokenFile string, offline bool, rate float64, w
 	if dbg != nil {
 		write = func(line string) { fmt.Fprintln(dbg, line) }
 	}
-	err := stage2(context.Background(), c, client, max(1, workers), only, top, write)
+	var err error
+	if probes != "" {
+		err = stage3(context.Background(), c, client, probes, max(1, workers), only, top, write)
+	} else {
+		err = stage2(context.Background(), c, client, max(1, workers), only, top, write)
+	}
 	fmt.Printf("\nTMDB: %d requests made, %d answers from the cache\n", client.Requests(), client.Hits())
 	return err
 }

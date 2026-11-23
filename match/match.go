@@ -8,14 +8,20 @@
 // seasons and episodes on disk fit TMDB's. Popularity only breaks ties.
 // The best is taken, and said "sure" when it is clearly the one;
 // otherwise the close candidates come with it, to check.
+//
+// Stage 3 (AddInside) weighs what the files say of themselves too, when
+// it is known: their ID tags, their lengths against TMDB's, and their
+// title tags as other names (see inside.go).
 package match
 
 import (
 	"cmp"
 	"context"
 	"errors"
+	"maps"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/overfin/analyser/analyse"
@@ -30,6 +36,20 @@ type Query struct {
 	// Episodes are, for a series, the highest episode number on disk in
 	// each season (season 0 is specials).
 	Episodes map[int]int
+
+	// What else is known, from the paths' ID tags or from inside the
+	// files (see AddInside); every one is optional.
+	//
+	// TMDB and IMDB are the title's IDs (TMDBKind "" when the kind isn't
+	// said).
+	TMDB     int
+	TMDBKind tmdb.Kind
+	IMDB     string
+	// Tagged are other names of the title, from the files' tags.
+	Tagged []Named
+	// Runtime is a film's length in seconds; Lengths a series' episodes'.
+	Runtime float64
+	Lengths map[Episode]float64
 }
 
 // Confidence says how sure a match is.
@@ -89,6 +109,9 @@ const (
 // details fetched), and when a match is sure.
 const (
 	weighed = 3
+	// weighedWithLengths are weighed when the files' lengths are known:
+	// then more of the same name can be told apart by their lengths.
+	weighedWithLengths = 6
 	// Sure from sureScore with sureMargin over the next; or, without a
 	// year to confirm it, from nameScore with a wide margin.
 	sureScore, sureMargin = 60, 15
@@ -99,8 +122,12 @@ const (
 
 // Match finds which TMDB title q is.
 func Match(ctx context.Context, src tmdb.Source, q Query) (Result, error) {
-	key := analyse.Key(qualifier.ReplaceAllString(q.Name, ""))
-	if key == "" {
+	names := namesOf(q)
+	id, err := embedded(ctx, src, q)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(names) == 0 && id == nil {
 		return Result{Confidence: None}, nil
 	}
 	kinds := []tmdb.Kind{tmdb.Movie, tmdb.TV}
@@ -110,7 +137,8 @@ func Match(ctx context.Context, src tmdb.Source, q Query) (Result, error) {
 	case analyse.Show:
 		kinds = kinds[1:]
 	}
-	cands, err := search(ctx, src, q, key, kinds, 0)
+	w := weighing{q: q, names: names, id: id}
+	cands, err := w.search(ctx, src, kinds, 0)
 	if err != nil {
 		return Result{}, err
 	}
@@ -123,7 +151,7 @@ func Match(ctx context.Context, src tmdb.Source, q Query) (Result, error) {
 		if kinds[0] == tmdb.TV {
 			other = tmdb.Movie
 		}
-		more, err := search(ctx, src, q, key, []tmdb.Kind{other}, otherKind)
+		more, err := w.search(ctx, src, []tmdb.Kind{other}, otherKind)
 		if err != nil {
 			return Result{}, err
 		}
@@ -133,9 +161,42 @@ func Match(ctx context.Context, src tmdb.Source, q Query) (Result, error) {
 	return decide(cands), nil
 }
 
-// search searches the kinds, weighs the results, and gives them best
-// first. penalty is added to every score.
-func search(ctx context.Context, src tmdb.Source, q Query, key string, kinds []tmdb.Kind, penalty int) ([]Candidate, error) {
+// queryName is a name to search and weigh: the paths' (weight 1), or a
+// tag's (tagWeight), with its year.
+type queryName struct {
+	key    string
+	year   int
+	weight float64
+}
+
+// namesOf are the query's names: the paths' first, then the tags' that
+// say something more (another name, or a year the paths don't say).
+func namesOf(q Query) []queryName {
+	var out []queryName
+	if key := analyse.Key(qualifier.ReplaceAllString(q.Name, "")); key != "" {
+		out = append(out, queryName{key, q.Year, 1})
+	}
+	for _, t := range q.Tagged {
+		key := analyse.Key(qualifier.ReplaceAllString(t.Name, ""))
+		if key == "" || slices.ContainsFunc(out, func(n queryName) bool { return n.key == key && (n.year == t.Year || t.Year == 0) }) {
+			continue
+		}
+		out = append(out, queryName{key, t.Year, tagWeight})
+	}
+	return out
+}
+
+// weighing is one query being matched: its names, and the title its IDs
+// name (nil for none).
+type weighing struct {
+	q     Query
+	names []queryName
+	id    *tmdb.Details
+}
+
+// search searches the kinds by each name, weighs the results, and gives
+// them best first. penalty is added to every score.
+func (w *weighing) search(ctx context.Context, src tmdb.Source, kinds []tmdb.Kind, penalty int) ([]Candidate, error) {
 	var found []tmdb.Found
 	seen := map[tmdb.Kind]map[int]bool{}
 	add := func(list []tmdb.Found) {
@@ -149,35 +210,72 @@ func search(ctx context.Context, src tmdb.Source, q Query, key string, kinds []t
 			}
 		}
 	}
-	for _, kind := range kinds {
-		var withYear []tmdb.Found
-		if q.Year > 0 {
-			list, err := src.Search(ctx, kind, key, q.Year)
-			if err != nil {
-				return nil, err
+	if w.id != nil && slices.Contains(kinds, w.id.Kind) {
+		add([]tmdb.Found{w.id.Found})
+	}
+	// byPaths are the results the paths' name found (the first name).
+	byPaths := map[tmdb.Kind]map[int]bool{}
+	for i, n := range w.names {
+		if i == 1 {
+			for k, ids := range seen {
+				byPaths[k] = maps.Clone(ids)
 			}
-			withYear = list
-			add(list)
 		}
-		// Without the year too, when the year found nothing named so: the
-		// year may be one off, or not the one TMDB keeps.
-		if q.Year == 0 || !slices.ContainsFunc(withYear, func(f tmdb.Found) bool { return named(key, f) }) {
-			list, err := src.Search(ctx, kind, key, 0)
-			if err != nil {
-				return nil, err
+		for _, kind := range kinds {
+			var withYear []tmdb.Found
+			if n.year > 0 {
+				list, err := src.Search(ctx, kind, n.key, n.year)
+				if err != nil {
+					return nil, err
+				}
+				withYear = list
+				add(list)
 			}
-			add(list)
+			// Without the year too, when the year found nothing named so:
+			// the year may be one off, or not the one TMDB keeps.
+			if n.year == 0 || !slices.ContainsFunc(withYear, func(f tmdb.Found) bool { return named(n.key, f) }) {
+				list, err := src.Search(ctx, kind, n.key, 0)
+				if err != nil {
+					return nil, err
+				}
+				add(list)
+			}
 		}
 	}
 
 	// A first weighing with the names the search gives; the best few are
-	// then weighed again with all their names and seasons.
+	// then weighed again with all their names, seasons and lengths.
 	cands := make([]Candidate, 0, len(found))
 	for _, f := range found {
-		cands = append(cands, weigh(q, key, &tmdb.Details{Found: f}, penalty))
+		cands = append(cands, w.weigh(&tmdb.Details{Found: f}, penalty, 0, ""))
 	}
 	sortCandidates(cands)
-	for i := range min(weighed, len(cands)) {
+	// The best few are weighed closely; and, when tags gave other names,
+	// the paths' name's best few too, so that a wrong tag can't crowd
+	// them out before their translations are known.
+	few := weighed
+	if w.q.Runtime > 0 || len(w.q.Lengths) > 0 {
+		few = weighedWithLengths
+	}
+	var close []int
+	for i := range min(few, len(cands)) {
+		close = append(close, i)
+	}
+	if len(w.names) > 1 {
+		n := 0
+		for i, c := range cands {
+			if n == few {
+				break
+			}
+			if len(byPaths) > 0 && byPaths[c.Kind][c.ID] {
+				n++
+				if !slices.Contains(close, i) {
+					close = append(close, i)
+				}
+			}
+		}
+	}
+	for _, i := range close {
 		d, err := src.Details(ctx, cands[i].Kind, cands[i].ID)
 		if errors.Is(err, tmdb.ErrNotFound) {
 			continue
@@ -186,7 +284,11 @@ func search(ctx context.Context, src tmdb.Source, q Query, key string, kinds []t
 			return nil, err
 		}
 		d.Popularity = cands[i].popularity // from the search, as for every candidate
-		cands[i] = weigh(q, key, d, penalty)
+		fit, why, err := lengthsFit(ctx, src, w.q.Lengths, d)
+		if err != nil {
+			return nil, err
+		}
+		cands[i] = w.weigh(d, penalty, fit, why)
 	}
 	sortCandidates(cands)
 	return cands, nil
@@ -197,8 +299,10 @@ func named(key string, f tmdb.Found) bool {
 	return similarity(key, analyse.Key(f.Name)) == 1 || similarity(key, analyse.Key(f.OriginalName)) == 1
 }
 
-// weigh scores a TMDB title against the query.
-func weigh(q Query, key string, d *tmdb.Details, penalty int) Candidate {
+// weigh scores a TMDB title against the query; lengths (why) is how
+// its episodes' lengths fit, weighed beforehand.
+func (w *weighing) weigh(d *tmdb.Details, penalty, lengths int, lengthsWhy string) Candidate {
+	q := w.q
 	c := Candidate{ID: d.ID, Kind: d.Kind, Name: d.Name, Year: d.Year, Score: penalty, popularity: d.Popularity}
 	if penalty != 0 {
 		c.Why = append(c.Why, "other kind")
@@ -208,36 +312,80 @@ func weigh(q Query, key string, d *tmdb.Details, penalty int) Candidate {
 		c.Why = append(c.Why, why)
 	}
 
-	best := 0.0
-	for i, name := range d.Names() {
-		s := similarity(key, analyse.Key(name))
-		if i >= 2+len(d.Translations) {
-			s *= altNameWeight
+	// The name: the paths', or a tag's (counting less), whichever fits
+	// best. The year: the paths'; or, when they say none, a tag's, for a
+	// candidate both names fit (see tagYearSim).
+	simOf := func(key string) float64 {
+		sim := 0.0
+		for i, name := range d.Names() {
+			s := similarity(key, analyse.Key(name))
+			if i >= 2+len(d.Translations) {
+				s *= altNameWeight
+			}
+			sim = max(sim, s)
 		}
-		best = max(best, s)
+		return sim
 	}
-	c.nameSim = best
-	if n := int(best*nameScore + 0.5); n > 0 {
-		part("name", n)
+	paths, tagSim, tagYear := 0.0, 0.0, 0
+	hasPaths := len(w.names) > 0 && w.names[0].weight == 1
+	for _, n := range w.names {
+		sim := simOf(n.key)
+		switch {
+		case n.weight == 1:
+			paths = sim
+		case sim > tagSim || sim == tagSim && tagYear == 0:
+			tagSim, tagYear = sim, n.year
+		}
+	}
+	weight := tagWeight
+	if !hasPaths {
+		weight = 1 // the tags are all there is
+	}
+	c.nameSim = max(paths, weight*tagSim)
+	if n := int(c.nameSim*nameScore + 0.5); n > 0 {
+		if paths >= weight*tagSim {
+			part("name", n)
+		} else {
+			part("name (tag)", n)
+		}
+	}
+	switch {
+	case q.Year > 0 && hasPaths && d.Year > 0:
+		part(yearFit(q.Year, d.Year))
+	case tagYear > 0 && d.Year > 0 && tagSim >= tagYearSim && (!hasPaths || paths >= tagYearSim):
+		why, n := yearFit(tagYear, d.Year)
+		part(why+" (tag)", n)
 	}
 
-	if q.Year > 0 && d.Year > 0 {
-		switch diff := abs(q.Year - d.Year); {
-		case diff == 0:
-			part("year", yearScore)
-		case diff == 1:
-			part("year ±1", yearNearScore)
-		default:
-			part("year off", yearOffScore)
-		}
+	if w.id != nil && w.id.ID == d.ID && w.id.Kind == d.Kind {
+		part("id", idScore)
 	}
-
 	if d.Kind == tmdb.TV && len(d.Seasons) > 0 {
 		if n, why := seasonsFit(q.Episodes, d.Seasons); why != "" {
 			part(why, n)
 		}
 	}
+	if d.Kind == tmdb.Movie {
+		if n, why := runtimeFit(q.Runtime, d.Runtime); why != "" {
+			part(why, n)
+		}
+	}
+	if lengthsWhy != "" {
+		part(lengthsWhy, lengths)
+	}
 	return c
+}
+
+// yearFit weighs the year the names say against TMDB's.
+func yearFit(year, tmdbYear int) (string, int) {
+	switch diff := abs(year - tmdbYear); {
+	case diff == 0:
+		return "year", yearScore
+	case diff == 1:
+		return "year ±1", yearNearScore
+	default:
+		return "year off", yearOffScore
+	}
 }
 
 // seasonsFit weighs the seasons on disk against TMDB's: each season must
@@ -374,6 +522,10 @@ func abs(n int) int {
 // and a series' highest episode number per season.
 func QueryOf(t *analyse.Title) Query {
 	q := Query{Kind: t.Kind, Name: t.Name, Year: t.Year}
+	if id, err := strconv.Atoi(t.IDs.TMDB); err == nil && id > 0 {
+		q.TMDB = id
+	}
+	q.IMDB = t.IDs.IMDB
 	if t.Kind == analyse.Show {
 		q.Episodes = map[int]int{}
 		for _, v := range t.Videos {
