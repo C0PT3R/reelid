@@ -5,7 +5,7 @@
 // truth the analyser still finds: per damage, per field, and the failures
 // that happen most, as anonymous patterns.
 //
-//	evaluate -key ~/analyser-corpus/library.tsv
+//	evaluate -key ~/reelid-private/library.tsv
 //
 // The key is private: the report never shows a title or a path from it,
 // only counts, the shapes of paths with the names masked ("<Title>"), and
@@ -71,14 +71,14 @@ var damages = []style{
 }
 
 func main() {
-	key := flag.String("key", os.Getenv("HOME")+"/analyser-corpus/library.tsv", "the answer key: a TSV of type, size and path")
+	key := flag.String("key", "", "the answer key: a TSV of type, size and path (required, except with -real-walk and -real)")
 	only := flag.String("only", "", "run only the damages whose name contains this")
 	top := flag.Int("patterns", 30, "how many of the commonest failure patterns to print")
 	samples := flag.Int("samples", 0, "print this many anonymous path patterns per damage, to see what it does")
 	debug := flag.String("debug", "", "write failures with their REAL paths to this file (keep it private, outside the repository)")
 	stage := flag.Int("stage", 1, "1: the paths' analysis; 2: matching to TMDB (asks TMDB, see -tmdb-token); 3: matching with what the files say too (see -probes)")
-	probes := flag.String("probes", os.Getenv("HOME")+"/analyser-corpus/probe.jsonl.gz", "stage 3: the key's videos' ffprobe answers, one JSON line each (path, probe), gzipped or not")
-	cache := flag.String("tmdb-cache", os.Getenv("HOME")+"/analyser-corpus/tmdb-cache", "stage 2: the folder of TMDB's cached answers")
+	probes := flag.String("probes", "", "stage 3 (required) and -real (optional): the videos' ffprobe answers, one JSON line each (path, probe), gzipped or not")
+	cache := flag.String("tmdb-cache", "", "stages 2 and 3, and -real: the folder of TMDB's cached answers (required; keep it private)")
 	tokenFile := flag.String("tmdb-token", os.Getenv("TMDB_TOKEN_FILE"), "stage 2: the file holding TMDB's API read access token (default $TMDB_TOKEN_FILE)")
 	offline := flag.Bool("offline", false, "stage 2: answer from the cache only, never ask TMDB")
 	rate := flag.Float64("rate", 15, "stage 2: at most this many requests to TMDB a second")
@@ -95,7 +95,14 @@ func main() {
 		}
 		return
 	}
+	need := func(ok bool, msg string) {
+		if !ok {
+			fmt.Fprintln(os.Stderr, msg)
+			os.Exit(2)
+		}
+	}
 	if *real != "" {
+		need(*cache != "", "-real needs -tmdb-cache")
 		if err := runRealStages(*real, *probes, *cache, *tokenFile, *offline, *rate, *workers, *top, *debug); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -103,6 +110,9 @@ func main() {
 		return
 	}
 
+	need(*key != "", "say where the answer key is: -key")
+	need(*stage < 2 || *cache != "", "stages 2 and 3 need -tmdb-cache")
+	need(*stage != 3 || *probes != "", "stage 3 needs -probes")
 	c, err := readCorpus(*key)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

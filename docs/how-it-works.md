@@ -85,7 +85,7 @@ the repository.
 
 ```sh
 export TMDB_TOKEN_FILE=~/.config/tmdb-token        # a file holding the token, mode 600
-go run ./cmd/analyse -tmdb-cache ~/analyser-corpus/tmdb-cache -root /media/films films.tsv
+go run ./cmd/analyse -tmdb-cache ~/reelid-private/tmdb-cache -root /media/films films.tsv
 ```
 
 

@@ -85,6 +85,11 @@ for _, t := range res.Titles {
 - `tmdb`: TMDB's API behind a disk cache and a rate limit.
 - `inside`: reading ffprobe's JSON.
 
+reelid has no TMDB key of its own. Pass yours to `tmdb.NewClient`, or
+implement `tmdb.Source` (six methods: search, details, season, find by
+IMDb ID, episode orders, an order's seasons) over your own TMDB client,
+so your key, cache and pace toward TMDB stay in one place.
+
 How each step decides: [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Being kind to TMDB

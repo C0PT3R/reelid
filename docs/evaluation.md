@@ -34,7 +34,7 @@ expected once years are removed). Titles a damage makes look the same (two
 films of one name once years and IDs are gone) may be merged without fault.
 
 ```sh
-go run ./cmd/evaluate -key ~/analyser-corpus/library.tsv
+go run ./cmd/evaluate -key ~/reelid-private/library.tsv
 go run ./cmd/evaluate -only flat -samples 5    # see what a damage does
 ```
 
@@ -65,8 +65,9 @@ reboot)", "sequel number", "name not TMDB's"…), never a title.
 
 ```sh
 go run ./cmd/evaluate -stage 2 -tmdb-token ~/.config/tmdb-token \
-    -tmdb-cache ~/analyser-corpus/tmdb-cache             # the default cache
-go run ./cmd/evaluate -stage 2 -offline -only translated # from the cache
+    -key ~/reelid-private/library.tsv -tmdb-cache ~/reelid-private/tmdb-cache
+go run ./cmd/evaluate -stage 2 -offline -only translated \
+    -key ~/reelid-private/library.tsv -tmdb-cache ~/reelid-private/tmdb-cache  # from the cache
 ```
 
 ## What the files say (stage 3)
@@ -82,7 +83,8 @@ series, the confidence's calibration), then stage 2's failure patterns
 with how many stage 3 fixed, and stage 3's new failures.
 
 ```sh
-go run ./cmd/evaluate -stage 3 -offline -probes ~/analyser-corpus/probe.jsonl.gz
+go run ./cmd/evaluate -stage 3 -offline -key ~/reelid-private/library.tsv \
+    -tmdb-cache ~/reelid-private/tmdb-cache -probes ~/reelid-private/probe.jsonl.gz
 ```
 
 ## The real-world evaluation
@@ -121,6 +123,7 @@ never a name. The listing and the `-debug` file hold real paths: keep
 them private, outside the repository.
 
 ```sh
-go run ./cmd/evaluate -real-walk ~/analyser-corpus/realworld.tsv -real-root /mnt/media
-go run ./cmd/evaluate -real ~/analyser-corpus/realworld.tsv -tmdb-token ~/.config/tmdb-token
+go run ./cmd/evaluate -real-walk ~/reelid-private/realworld.tsv -real-root /mnt/media
+go run ./cmd/evaluate -real ~/reelid-private/realworld.tsv -tmdb-token ~/.config/tmdb-token \
+    -tmdb-cache ~/reelid-private/tmdb-cache
 ```

@@ -30,8 +30,8 @@ import (
 // TMDB ID, season and episodes). Downloads without a library twin are
 // counted apart, not scored.
 //
-//	evaluate -real-walk ~/analyser-corpus/realworld.tsv -real-root /mnt/media
-//	evaluate -real ~/analyser-corpus/realworld.tsv
+//	evaluate -real-walk ~/reelid-private/realworld.tsv -real-root /mnt/media
+//	evaluate -real ~/reelid-private/realworld.tsv
 //
 // The walk only stats the files (one walk of each tree); nothing is read.
 
