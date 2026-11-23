@@ -13,8 +13,9 @@ any media server.
 For each video:
 
 - **film or episode**, and the **title** it belongs to, with its **TMDB ID**
-  and how sure the match is (`sure`, or `to check` with the other
-  candidates);
+  and how sure the match is: `sure`, or `to check` with the other
+  candidates and why (closed codes such as `close`, `year-off`,
+  `runtime-off`, for you to word in your own language);
 - for an episode, its **season and episode numbers**, multi-episode files
   included, placed in **TMDB's order** even when the file is numbered
   another way (absolute numbers, a DVD order, a season split differently);

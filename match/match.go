@@ -62,6 +62,24 @@ const (
 	None  Confidence = "none"     // nothing found
 )
 
+// Reason says why a match is only to check. The reasons are a closed
+// list, for a host to word in its own language; a match to check has
+// one or more.
+type Reason string
+
+// The reasons.
+const (
+	ReasonWeak          Reason = "weak"           // no title fits clearly: the best scores low
+	ReasonClose         Reason = "close"          // others fit nearly as well (see Others)
+	ReasonNameNear      Reason = "name-near"      // the name is only near the title's names
+	ReasonYearOff       Reason = "year-off"       // the year said is TMDB's ±1 or further
+	ReasonOtherKind     Reason = "other-kind"     // a film for what looked like a series, or the other way
+	ReasonRuntimeOff    Reason = "runtime-off"    // the film's length is far from TMDB's
+	ReasonLengthsOff    Reason = "lengths-off"    // the episodes' lengths are far from TMDB's
+	ReasonSeasonsMisfit Reason = "seasons-misfit" // a season on disk that TMDB doesn't have
+	ReasonEpisodesOver  Reason = "episodes-over"  // an episode number beyond TMDB's count
+)
+
 // Candidate is a TMDB title weighed for a query.
 type Candidate struct {
 	ID    int       `json:"id"`
@@ -85,9 +103,11 @@ var qualifier = regexp.MustCompile(`\s*[(\[][A-Za-z]{2}[)\]]\s*$`)
 // Result is a match: the best candidate, how sure it is, and the other
 // candidates close to it when it isn't sure.
 type Result struct {
-	Best       *Candidate  `json:"best,omitempty"`
-	Confidence Confidence  `json:"confidence"`
-	Others     []Candidate `json:"others,omitempty"`
+	Best       *Candidate `json:"best,omitempty"`
+	Confidence Confidence `json:"confidence"`
+	// Reasons say why a match is to check (none when sure or none).
+	Reasons []Reason    `json:"reasons,omitempty"`
+	Others  []Candidate `json:"others,omitempty"`
 	// All are every candidate weighed, best first, for looking into a
 	// match.
 	All []Candidate `json:"-"`
@@ -521,7 +541,48 @@ func decide(cands []Candidate) Result {
 			res.Others = append(res.Others, c)
 		}
 	}
+	res.Reasons = reasons(best, len(res.Others) > 0)
 	return res
+}
+
+// reasons says why best is only to check: from its score's parts, and
+// whether others fit nearly as well.
+func reasons(best Candidate, close bool) []Reason {
+	var out []Reason
+	add := func(r Reason) {
+		if !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	if best.Score < sureScore {
+		add(ReasonWeak)
+	}
+	if close {
+		add(ReasonClose)
+	}
+	if best.slip || best.nameSim < 0.999 {
+		add(ReasonNameNear)
+	}
+	for _, why := range best.Why {
+		switch strings.TrimSuffix(why, " (tag)") {
+		case "year ±1", "year off":
+			add(ReasonYearOff)
+		case "other kind":
+			add(ReasonOtherKind)
+		case "runtime off":
+			add(ReasonRuntimeOff)
+		case "lengths off":
+			add(ReasonLengthsOff)
+		case "seasons misfit":
+			add(ReasonSeasonsMisfit)
+		case "episodes over":
+			add(ReasonEpisodesOver)
+		}
+	}
+	if len(out) == 0 {
+		add(ReasonClose) // not sure by its margin alone
+	}
+	return out
 }
 
 // doubtful says whether a candidate can't be sure whatever its score:

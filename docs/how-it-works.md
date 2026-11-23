@@ -67,7 +67,10 @@ The best is taken, **sure** when it scores well with a clear margin over
 the next, and nothing says it isn't the one (a length far from TMDB's
 or seasons TMDB doesn't have, beside another title of its name; a name
 only near the paths'); otherwise **to check**, with the close candidates
-beside it.
+beside it and its **reasons** (`Result.Reasons`, a closed list):
+`weak` (nothing fits clearly), `close` (others nearly as well),
+`name-near`, `year-off`, `other-kind`, `runtime-off`, `lengths-off`,
+`seasons-misfit`, `episodes-over`.
 
 TMDB is a free service, so the client (`tmdb/`) is careful with it:
 

@@ -3,6 +3,7 @@ package match
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/C0PT3R/reelid/analyse"
@@ -390,5 +391,38 @@ func TestTranslatedTitleFoundByItsDetails(t *testing.T) {
 	}
 	if res.Best == nil || res.Best.ID != 60 {
 		t.Errorf("got %+v (%s), want 60", res.Best, res.Confidence)
+	}
+}
+
+func TestReasonsToCheck(t *testing.T) {
+	tests := []struct {
+		name  string
+		cands []Candidate
+		want  []Reason
+	}{
+		{"length off beside a namesake",
+			[]Candidate{{ID: 30, Score: 60, Why: []string{"name", "year", "runtime off"}, nameSim: 1},
+				{ID: 31, Score: 30, Why: []string{"name", "year off"}, nameSim: 1}},
+			[]Reason{ReasonRuntimeOff}},
+		{"weak and near",
+			[]Candidate{{ID: 40, Score: 35, Why: []string{"name"}, nameSim: 0.7}},
+			[]Reason{ReasonWeak, ReasonNameNear}},
+		{"two of one name",
+			[]Candidate{{ID: 50, Score: 70, Why: []string{"name", "year ±1"}, nameSim: 1},
+				{ID: 51, Score: 62, Why: []string{"name", "year ±1"}, nameSim: 1}},
+			[]Reason{ReasonClose, ReasonYearOff}},
+		{"seasons TMDB doesn't have, other kind",
+			[]Candidate{{ID: 60, Score: 45, Why: []string{"other kind", "name", "seasons misfit"}, nameSim: 1}},
+			[]Reason{ReasonWeak, ReasonOtherKind, ReasonSeasonsMisfit}},
+	}
+	for _, tt := range tests {
+		res := decide(tt.cands)
+		if res.Confidence != Check || !slices.Equal(res.Reasons, tt.want) {
+			t.Errorf("%s: %s %v, want to check %v", tt.name, res.Confidence, res.Reasons, tt.want)
+		}
+	}
+	sure := decide([]Candidate{{ID: 70, Score: 90, Why: []string{"name", "year"}, nameSim: 1}})
+	if sure.Confidence != Sure || sure.Reasons != nil {
+		t.Errorf("sure: %s %v, want no reasons", sure.Confidence, sure.Reasons)
 	}
 }
